@@ -1,4 +1,4 @@
-// rtl/poly_ram_bank.sv
+
 module poly_ram_bank #(
   parameter int N      = 256,
   parameter int W      = 16,
