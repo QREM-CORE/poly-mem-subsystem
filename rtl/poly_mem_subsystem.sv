@@ -18,8 +18,7 @@ module poly_mem_subsystem #(
   output logic                         ntt_stall,
 
   // ---------------- PolyMul (reads on Port B, write on Port A) ----
-  input  logic                         pm_req,
-
+  input  logic                          pm_req,
   input  logic [$clog2(NUM_BANKS)-1:0]  pm_bank_r0,
   input  logic [ADDR_W-1:0]            pm_addr_r0,
   output logic [W-1:0]                 pm_rdata_r0,
