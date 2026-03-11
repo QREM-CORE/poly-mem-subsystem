@@ -69,7 +69,7 @@ module poly_mem_subsystem #(
     end
   endgenerate
 
-  // ---------------- Simple fixed-priority port assignment ----------------
+  
   // Port A priority: NTT > PolyMul write > Pack/Unpack
   // Port B: PolyMul reads only
   //
