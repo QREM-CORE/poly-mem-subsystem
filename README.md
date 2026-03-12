@@ -347,15 +347,16 @@ TB PASS
 
 poly-mem-subsystem/
 
-rtl/
-poly_ram_bank.sv
-poly_mem_wrapper_4bank.sv
-poly_mem_subsystem.sv
-seed_ram.sv
+**rtl/**
 
-tb/
-tb_poly_mem_wrapper_4bank.sv
-tb_seed_ram.sv
+- poly_ram_bank.sv
+- poly_mem_wrapper_4bank.sv
+- poly_mem_subsystem.sv
+- seed_ram.sv
+
+**tb/**
+- tb_poly_mem_wrapper_4bank.sv
+- tb_seed_ram.sv
 
 docs/
 memory_map.md
