@@ -46,7 +46,7 @@ High-level architecture:
     +-------------+---------------------------+
     |             |             |             |
   Bank0         Bank1         Bank2         Bank3
-    |             |             |             |
+ 
 poly_ram_bank  poly_ram_bank  poly_ram_bank  poly_ram_bank
 
        Separate memory for randomness
