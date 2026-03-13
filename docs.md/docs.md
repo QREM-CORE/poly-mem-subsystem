@@ -76,49 +76,6 @@ Keccak / SHAKE
 v
 seed_ram
 
----
-
-# 4. Polynomial Memory Organization
-
-Each polynomial contains:
-
-N = 256 coefficients
-
-Each coefficient is:
-
-16 bits wide
-
-To enable parallel access, the polynomial is divided across **four memory banks**.
-
-Each bank stores **every fourth coefficient**.
-
----
-
-# 5. Memory Mapping
-
-The coefficient index determines the bank and row using:
-
----
-
-# 4. Polynomial Memory Organization
-
-Each polynomial contains:
-
-N = 256 coefficients
-
-Each coefficient is:
-
-16 bits wide
-
-To enable parallel access, the polynomial is divided across **four memory banks**.
-
-Each bank stores **every fourth coefficient**.
-
----
-
-# 5. Memory Mapping
-
-The coefficient index determines the bank and row using:
 
 ---
 
@@ -280,31 +237,31 @@ Responsibilities:
 
 Explanation:
 
-clk  
+**clk**  
 System clock
 
-rst_n  
+**rst_n**  
 Active-low reset
 
-poly_id_i  
+**poly_id_i**  
 Selects which polynomial is being accessed
 
-v_i  
+**v_i**  
 Request valid signal
 
-rd_en_i  
+**rd_en_i**  
 Indicates a read request
 
-rd_idx_i  
+**rd_idx_i** 
 Coefficient indices for four lanes
 
-wr_en_i  
+**wr_en_i** 
 Write enable signals for four lanes
 
-wr_idx_i  
+**wr_idx_i**  
 Coefficient indices for writes
 
-wr_data_i  
+**wr_data_i** 
 Data values to write
 
 ---
@@ -313,10 +270,10 @@ Data values to write
 - ready_o
 - rd_data_o[3:0]
 
-ready_o  
+**ready_o**  
 Indicates whether memory access is safe (no conflicts)
 
-rd_data_o  
+**rd_data_o** 
 Data returned from memory banks
 
 ---
@@ -347,10 +304,10 @@ The memory uses **synchronous read behavior**.
 
 Timing example:
 
-Cycle N  
+**Cycle N** 
 Address applied
 
-Cycle N+1  
+**Cycle N+1**  
 Data returned
 
 Writes occur on the rising clock edge.
@@ -380,24 +337,28 @@ Configuration:
 
 The memory system was tested using **Icarus Verilog**.
 
-Compile simulation:
+**Compile simulation:**
+
 rm -rf build
+
 mkdir build
 
 iverilog -g2012
+
 -o build/sim_out
+
 rtl/poly_ram_bank.sv
+
 rtl/poly_mem_wrapper_4bank.sv
+
 tb/tb_poly_mem_wrapper_4bank.sv
 
 
-Run simulation:
-
+**Run simulation:**
 
 vvp build/sim_out
 
-
-Expected output:
+**Expected output:**
 
 
 TB PASS
