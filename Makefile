@@ -58,7 +58,6 @@ else
 	@echo 'run -all' >> run_$*.macro
 	@echo 'quit' >> run_$*.macro
 	vsim -c -do run_$*.macro work.$*
-	rm -f run_$*.macro
 endif
 
 # Clean build files

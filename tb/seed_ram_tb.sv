@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_seed_ram;
+module seed_ram_tb;
 
   localparam int DEPTH  = 16;
   localparam int W      = 64;

@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_poly_mem_wrapper_4bank;
+module poly_mem_wrapper_4bank_tb;
 
   localparam int N = 256;
   localparam int W = 16;

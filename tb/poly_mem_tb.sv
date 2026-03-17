@@ -1,5 +1,5 @@
 
-module tb_poly_mem;
+module poly_mem_tb;
 
   localparam int NUM_BANKS = 4;
   localparam int N         = 256;
