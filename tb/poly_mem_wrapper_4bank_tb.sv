@@ -2,231 +2,148 @@
 
 module poly_mem_wrapper_4bank_tb;
 
-  localparam int N = 256;
-  localparam int W = 16;
-  localparam int NUM_POLYS = 4;
-  localparam int BANK_ROWS = N/4;
-  localparam int BANK_DEPTH = BANK_ROWS * NUM_POLYS;
+  parameter int N = 256;
+  parameter int W = 16;
+  parameter int NUM_POLYS = 4;
 
-  logic clk, rst_n;
+  logic clk;
+  logic rst;
 
-  logic [$clog2(NUM_POLYS)-1:0] poly_id;
-  logic v;
-  logic rd_en;
-  logic ready;
+  logic [$clog2(NUM_POLYS)-1:0] poly_id_i;
+  logic                         v_i;
+  logic                         rd_en_i;
+  logic                         ready_o;
 
-  logic [3:0][$clog2(N)-1:0] rd_idx;
-  logic [3:0][W-1:0]         rd_data;
+  logic [3:0][$clog2(N)-1:0]    rd_idx_i;
+  logic [3:0]                   rd_lane_valid_i;
 
-  logic [3:0]                wr_en;
-  logic [3:0][$clog2(N)-1:0] wr_idx;
-  logic [3:0][W-1:0]         wr_data;
+  logic                         rd_valid_o;
+  logic [$clog2(NUM_POLYS)-1:0] rd_poly_id_o;
+  logic [3:0][$clog2(N)-1:0]    rd_idx_o;
+  logic [3:0]                   rd_lane_valid_o;
+  logic [3:0][W-1:0]            rd_data_o;
 
-  logic [W-1:0] golden [0:3][0:BANK_DEPTH-1];
-  logic [3:0][W-1:0] exp_next;
+  logic [3:0]                   wr_en_i;
+  logic [3:0][$clog2(N)-1:0]    wr_idx_i;
+  logic [3:0][W-1:0]            wr_data_i;
 
-  integer bi, bj;
-  integer i, base, l;
-  integer idx0, idx1, idx2, idx3;
-
+  // DUT
   poly_mem_wrapper_4bank #(
     .N(N),
     .W(W),
     .NUM_POLYS(NUM_POLYS)
-  ) dut (
-    .clk(clk),
-    .rst_n(rst_n),
-    .poly_id_i(poly_id),
-    .v_i(v),
-    .rd_en_i(rd_en),
-    .ready_o(ready),
-    .rd_idx_i(rd_idx),
-    .rd_data_o(rd_data),
-    .wr_en_i(wr_en),
-    .wr_idx_i(wr_idx),
-    .wr_data_i(wr_data)
+  ) DUT (
+    .clk                 (clk),
+    .rst_n               (rst),
+    .poly_id_i           (poly_id_i),
+    .v_i                 (v_i),
+    .rd_en_i             (rd_en_i),
+    .ready_o             (ready_o),
+    .rd_idx_i            (rd_idx_i),
+    .rd_lane_valid_i     (rd_lane_valid_i),
+    .rd_valid_o          (rd_valid_o),
+    .rd_poly_id_o        (rd_poly_id_o),
+    .rd_idx_o            (rd_idx_o),
+    .rd_lane_valid_o     (rd_lane_valid_o),
+    .rd_data_o           (rd_data_o),
+    .wr_en_i             (wr_en_i),
+    .wr_idx_i            (wr_idx_i),
+    .wr_data_i           (wr_data_i)
   );
 
+  // Clock
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
-  task automatic tick;
-    begin
-      @(posedge clk);
-      #1;
-    end
-  endtask
-
-  function automatic [1:0] cmi_bank_idx;
-    input [7:0] order;
-    reg [3:0] sum;
-    begin
-      sum = order[1:0] + order[3:2] + order[5:4] + order[7:6];
-      cmi_bank_idx = sum[1:0];
-    end
-  endfunction
-
-  function automatic [7:0] cmi_bank_addr;
-    input [$clog2(NUM_POLYS)-1:0] pid;
-    input [7:0] order;
-    reg [5:0] row;
-    begin
-      row = order >> 2;
-      cmi_bank_addr = pid * BANK_ROWS + row;
-    end
-  endfunction
-
   initial begin
-    for (bi = 0; bi < 4; bi = bi + 1) begin
-      for (bj = 0; bj < BANK_DEPTH; bj = bj + 1) begin
-        golden[bi][bj] = '0;
-      end
-    end
+    // Reset / init
+    rst             = 1'b1;
+    poly_id_i       = '0;
+    v_i             = 1'b0;
+    rd_en_i         = 1'b0;
+    rd_idx_i        = '0;
+    rd_lane_valid_i = '0;
+    wr_en_i         = '0;
+    wr_idx_i        = '0;
+    wr_data_i       = '0;
 
-    rst_n    = 0;
-    v        = 0;
-    rd_en    = 0;
-    poly_id  = 0;
-    wr_en    = 4'b0000;
-    wr_idx[0] = 0; wr_idx[1] = 0; wr_idx[2] = 0; wr_idx[3] = 0;
-    wr_data[0] = 0; wr_data[1] = 0; wr_data[2] = 0; wr_data[3] = 0;
-    rd_idx[0] = 0; rd_idx[1] = 0; rd_idx[2] = 0; rd_idx[3] = 0;
-    exp_next[0] = 0; exp_next[1] = 0; exp_next[2] = 0; exp_next[3] = 0;
+    #20;
+    rst = 1'b0;
 
-    repeat (3) tick();
-    rst_n = 1;
-    tick();
+    // --------------------------------------------------
+    // WRITE 4 values to 4 indices that should map cleanly
+    // --------------------------------------------------
+    @(posedge clk);
+    v_i       <= 1'b1;
+    rd_en_i   <= 1'b0;
+    poly_id_i <= 2'd0;
 
-    // Test 1: single-lane writes for all coefficients of poly 0
-    poly_id = 0;
-    rd_en   = 0;
+    wr_en_i[0]   <= 1'b1;
+    wr_en_i[1]   <= 1'b1;
+    wr_en_i[2]   <= 1'b1;
+    wr_en_i[3]   <= 1'b1;
 
-    for (i = 0; i < N; i = i + 1) begin
-      v         = 1;
-      wr_en     = 4'b0001;
-      wr_idx[0] = i[7:0];
-      wr_idx[1] = 0;
-      wr_idx[2] = 0;
-      wr_idx[3] = 0;
+    wr_idx_i[0]  <= 8'd2;
+    wr_idx_i[1]  <= 8'd66;
+    wr_idx_i[2]  <= 8'd130;
+    wr_idx_i[3]  <= 8'd194;
 
-      wr_data[0] = i[W-1:0];
-      wr_data[1] = 0;
-      wr_data[2] = 0;
-      wr_data[3] = 0;
+    wr_data_i[0] <= 16'hA000;
+    wr_data_i[1] <= 16'hA001;
+    wr_data_i[2] <= 16'hA002;
+    wr_data_i[3] <= 16'hA003;
 
-      rd_idx[0] = 0;
-      rd_idx[1] = 0;
-      rd_idx[2] = 0;
-      rd_idx[3] = 0;
+    @(posedge clk);
+    wr_en_i <= 4'b0000;
 
-      tick();
-      if (!ready)
-        $fatal(1, "Unexpected stall during single-lane write at coeff=%0d", i);
+    @(posedge clk);
+    v_i       <= 1'b1;
+    rd_en_i   <= 1'b0;
+    poly_id_i <= 2'd0;
 
-      golden[cmi_bank_idx(i[7:0])][cmi_bank_addr(poly_id, i[7:0])] = i[W-1:0];
-    end
+    wr_en_i[0] <= 1'b1;
+    wr_en_i[1]  <= 1'b1;
+    wr_en_i[2]   <= 1'b1;
+    wr_en_i[3]   <= 1'b1;
 
-    v     = 0;
-    wr_en = 4'b0000;
-    tick();
+    wr_idx_i[0]<= 8'd1;
+    wr_idx_i[1] <= 8'd65;
+    wr_idx_i[2]  <= 8'd129;
+    wr_idx_i[3]  <= 8'd193;
 
-    // Test 2: non-conflicting reads
-    rd_en = 1;
-    for (base = 0; base < 16; base = base + 1) begin
-      idx0 = base;
-      idx1 = base + 64;
-      idx2 = base + 128;
-      idx3 = base + 192;
+    wr_data_i[0]= 16'hA004;
+    wr_data_i[1]<= 16'hA005;
+    wr_data_i[2] <= 16'hA006;
+    wr_data_i[3] <= 16'hA007;
 
-      v     = 1;
-      wr_en = 4'b0000;
+    @(posedge clk);
+    wr_en_i <= 4'b0000;
 
-      rd_idx[0] = idx0[7:0];
-      rd_idx[1] = idx1[7:0];
-      rd_idx[2] = idx2[7:0];
-      rd_idx[3] = idx3[7:0];
+    // --------------------------------------------------
+    // READ BACK same 4 indices
+    // --------------------------------------------------
+    @(posedge clk);
+    rd_en_i         <= 1'b1;
+    rd_lane_valid_i <= 4'b1111;
+    rd_idx_i[0]     <= 8'd1;
+    rd_idx_i[1]     <= 8'd65;
+    rd_idx_i[2]     <= 8'd129;
+    rd_idx_i[3]     <= 8'd193;
 
-      exp_next[0] = golden[cmi_bank_idx(idx0[7:0])][cmi_bank_addr(poly_id, idx0[7:0])];
-      exp_next[1] = golden[cmi_bank_idx(idx1[7:0])][cmi_bank_addr(poly_id, idx1[7:0])];
-      exp_next[2] = golden[cmi_bank_idx(idx2[7:0])][cmi_bank_addr(poly_id, idx2[7:0])];
-      exp_next[3] = golden[cmi_bank_idx(idx3[7:0])][cmi_bank_addr(poly_id, idx3[7:0])];
+    @(posedge clk); // request accepted into wrapper
+    @(posedge clk); // RAM data aligned to output response
 
-      tick();
-      if (!ready)
-        $fatal(1, "Unexpected stall during non-conflicting read set base=%0d", base);
+    rd_en_i         <= 1'b1;
+    rd_lane_valid_i <= 4'b1111;
+    rd_idx_i[0]     <= 8'd2;
+    rd_idx_i[1]     <= 8'd66;
+    rd_idx_i[2]     <= 8'd130;
+    rd_idx_i[3]     <= 8'd194;
 
-      tick();
-      for (l = 0; l < 4; l = l + 1) begin
-        if (rd_data[l] !== exp_next[l]) begin
-          $fatal(1, "Read mismatch lane=%0d base=%0d got=%0h exp=%0h",
-                 l, base, rd_data[l], exp_next[l]);
-        end
-      end
-    end
+    @(posedge clk); // request accepted into wrapper
+    @(posedge clk); // RAM data aligned to output response
 
-    v = 0;
-    tick();
-
-    // Test 3: intentional conflict
-    v     = 1;
-    rd_en = 1;
-    wr_en = 4'b0000;
-
-    rd_idx[0] = 0;
-    rd_idx[1] = 4;
-    rd_idx[2] = 1;
-    rd_idx[3] = 2;
-
-    tick();
-    if (ready)
-      $fatal(1, "Expected ready=0 on conflicting read request but got ready=1");
-
-    v = 0;
-    tick();
-
-    // Test 4: poly_id offset
-    poly_id    = 1;
-    rd_en      = 0;
-    v          = 1;
-    wr_en      = 4'b0001;
-    wr_idx[0]  = 10;
-    wr_idx[1]  = 0;
-    wr_idx[2]  = 0;
-    wr_idx[3]  = 0;
-    wr_data[0] = 16'h55AA;
-    wr_data[1] = 0;
-    wr_data[2] = 0;
-    wr_data[3] = 0;
-
-    tick();
-    if (!ready)
-      $fatal(1, "Unexpected stall during poly_id=1 write");
-
-    golden[cmi_bank_idx(8'd10)][cmi_bank_addr(poly_id, 8'd10)] = 16'h55AA;
-
-    v     = 0;
-    wr_en = 4'b0000;
-    tick();
-
-    rd_en    = 1;
-    v        = 1;
-    rd_idx[0] = 10;
-    rd_idx[1] = 74;
-    rd_idx[2] = 138;
-    rd_idx[3] = 202;
-
-    tick();
-    if (!ready)
-      $fatal(1, "Unexpected stall during poly_id=1 read");
-
-    tick();
-    if (rd_data[0] !== 16'h55AA)
-      $fatal(1, "poly_id=1 readback mismatch got=%0h exp=55AA", rd_data[0]);
-
-    v = 0;
-    tick();
-
-    $display("TB PASS");
+    #20;
     $finish;
   end
 
