@@ -128,7 +128,7 @@ module mem_frontend_top_tb;
   endtask
 
   // ------------------------------------------------------------
-  // PAU write to logical (poly_id, coeff_idx)
+  // PAU write/read through shared NTT-side path
   // ------------------------------------------------------------
   task automatic pau_write(
     input int poly_id,
@@ -144,16 +144,12 @@ module mem_frontend_top_tb;
       pau_wdata     <= data;
 
       @(posedge clk);
-      pau_req       <= 1'b0;
-      pau_we        <= 1'b0;
-      pau_wdata     <= '0;
+      pau_req   <= 1'b0;
+      pau_we    <= 1'b0;
+      pau_wdata <= '0;
     end
   endtask
 
-  // ------------------------------------------------------------
-  // PAU read from logical (poly_id, coeff_idx)
-  // Expect 1-cycle read latency through subsystem
-  // ------------------------------------------------------------
   task automatic pau_read_check(
     input int poly_id,
     input int coeff_idx,
@@ -179,7 +175,7 @@ module mem_frontend_top_tb;
   endtask
 
   // ------------------------------------------------------------
-  // HSU write and read back through HSU path
+  // HSU write/read through shared NTT-side path
   // ------------------------------------------------------------
   task automatic hsu_write(
     input int poly_id,
@@ -195,9 +191,9 @@ module mem_frontend_top_tb;
       hsu_wdata     <= data;
 
       @(posedge clk);
-      hsu_req       <= 1'b0;
-      hsu_we        <= 1'b0;
-      hsu_wdata     <= '0;
+      hsu_req   <= 1'b0;
+      hsu_we    <= 1'b0;
+      hsu_wdata <= '0;
     end
   endtask
 
@@ -226,7 +222,54 @@ module mem_frontend_top_tb;
   endtask
 
   // ------------------------------------------------------------
-  // Arbitration: PAU beats HSU beats TR
+  // Transcoder write/read through PU path
+  // ------------------------------------------------------------
+  task automatic tr_write(
+    input int poly_id,
+    input int coeff_idx,
+    input logic [W-1:0] data
+  );
+    begin
+      @(posedge clk);
+      tr_req       <= 1'b1;
+      tr_poly_id   <= POLY_W'(poly_id);
+      tr_coeff_idx <= COEFF_W'(coeff_idx);
+      tr_we        <= 1'b1;
+      tr_wdata     <= data;
+
+      @(posedge clk);
+      tr_req   <= 1'b0;
+      tr_we    <= 1'b0;
+      tr_wdata <= '0;
+    end
+  endtask
+
+  task automatic tr_read_check(
+    input int poly_id,
+    input int coeff_idx,
+    input logic [W-1:0] exp_data
+  );
+    begin
+      @(posedge clk);
+      tr_req       <= 1'b1;
+      tr_poly_id   <= POLY_W'(poly_id);
+      tr_coeff_idx <= COEFF_W'(coeff_idx);
+      tr_we        <= 1'b0;
+
+      @(posedge clk);
+      #1;
+      if (tr_rdata !== exp_data) begin
+        $fatal(1, "TR read mismatch: poly=%0d coeff=%0d got=%0h exp=%0h",
+               poly_id, coeff_idx, tr_rdata, exp_data);
+      end
+
+      @(posedge clk);
+      tr_req <= 1'b0;
+    end
+  endtask
+
+  // ------------------------------------------------------------
+  // Arbitration check: PAU beats HSU on shared NTT-side path
   // ------------------------------------------------------------
   task automatic arbitration_priority_check;
     begin
@@ -243,16 +286,36 @@ module mem_frontend_top_tb;
       hsu_we        <= 1'b1;
       hsu_wdata     <= 16'h2222;
 
-      tr_req        <= 1'b1;
-      tr_poly_id    <= 7;
-      tr_coeff_idx  <= 16;
-      tr_we         <= 1'b1;
-      tr_wdata      <= 16'h3333;
-
       #1;
       if (pau_stall !== 1'b0) $fatal(1, "PAU should win arbitration");
       if (hsu_stall !== 1'b1) $fatal(1, "HSU should stall under PAU");
-      if (tr_stall  !== 1'b1) $fatal(1, "TR should stall under PAU");
+
+      @(posedge clk);
+      clear_all();
+    end
+  endtask
+
+  // ------------------------------------------------------------
+  // PU path should be independent of NTT-side arbitration
+  // ------------------------------------------------------------
+  task automatic transcoder_parallel_check;
+    begin
+      @(posedge clk);
+      pau_req       <= 1'b1;
+      pau_poly_id   <= 2;
+      pau_coeff_idx <= 20;
+      pau_we        <= 1'b1;
+      pau_wdata     <= 16'hAAAA;
+
+      tr_req        <= 1'b1;
+      tr_poly_id    <= 9;
+      tr_coeff_idx  <= 14;
+      tr_we         <= 1'b1;
+      tr_wdata      <= 16'hBBBB;
+
+      #1;
+      if (pau_stall !== 1'b0) $fatal(1, "PAU should not stall here");
+      if (tr_stall  !== 1'b0) $fatal(1, "TR should not stall here");
 
       @(posedge clk);
       clear_all();
@@ -278,21 +341,29 @@ module mem_frontend_top_tb;
   initial begin
     reset_all();
 
-    // 1) Write/read through PAU
+    // 1) PAU path
     pau_write(3, 9, 16'hA5A5);
     pau_read_check(3, 9, 16'hA5A5);
 
-    // 2) Write/read through HSU
+    // 2) HSU path
     hsu_write(10, 17, 16'h5A5A);
     hsu_read_check(10, 17, 16'h5A5A);
 
-    // 3) Arbitration priority
+    // 3) TR path
+    tr_write(7, 21, 16'h1234);
+    tr_read_check(7, 21, 16'h1234);
+
+    // 4) Shared-path arbitration
     arbitration_priority_check();
 
-    // 4) Wipe and verify old data disappears
+    // 5) Parallel PAU + Transcoder
+    transcoder_parallel_check();
+
+    // 6) Wipe and verify
     run_wipe();
     pau_read_check(3, 9, 16'h0000);
     hsu_read_check(10, 17, 16'h0000);
+    tr_read_check(7, 21, 16'h0000);
 
     $display("TB PASS");
     $finish;

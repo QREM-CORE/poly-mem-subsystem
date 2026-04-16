@@ -1,53 +1,48 @@
 `timescale 1ns/1ps
 
-module mem_frontend_top_tb;
+module poly_mem_tb;
 
   localparam int NUM_BANKS = 4;
-  localparam int NUM_POLYS = 32;
-  localparam int NCOEFF    = 256;
   localparam int N         = 2048;
   localparam int W         = 16;
   localparam int ADDR_W    = $clog2(N);
-  localparam int POLY_W    = $clog2(NUM_POLYS);
-  localparam int COEFF_W   = $clog2(NCOEFF);
+  localparam int BANK_W    = $clog2(NUM_BANKS);
 
-  logic clk;
-  logic rst_n;
+  logic clk, rst_n;
 
+  // Wipe
   logic wipe_i;
   logic wipe_done_o;
 
-  // PAU
-  logic               pau_req;
-  logic [POLY_W-1:0]  pau_poly_id;
-  logic [COEFF_W-1:0] pau_coeff_idx;
-  logic               pau_we;
-  logic [W-1:0]       pau_wdata;
-  logic [W-1:0]       pau_rdata;
-  logic               pau_stall;
+  // NTT
+  logic              ntt_req;
+  logic [BANK_W-1:0] ntt_bank;
+  logic              ntt_we;
+  logic [ADDR_W-1:0] ntt_addr;
+  logic [W-1:0]      ntt_wdata;
+  logic [W-1:0]      ntt_rdata;
+  logic              ntt_stall;
 
-  // HSU
-  logic               hsu_req;
-  logic [POLY_W-1:0]  hsu_poly_id;
-  logic [COEFF_W-1:0] hsu_coeff_idx;
-  logic               hsu_we;
-  logic [W-1:0]       hsu_wdata;
-  logic [W-1:0]       hsu_rdata;
-  logic               hsu_stall;
+  // PolyMul
+  logic              pm_req;
+  logic [BANK_W-1:0] pm_bank_r0, pm_bank_r1, pm_bank_w;
+  logic [ADDR_W-1:0] pm_addr_r0, pm_addr_r1, pm_addr_w;
+  logic              pm_we;
+  logic [W-1:0]      pm_wdata;
+  logic [W-1:0]      pm_rdata_r0, pm_rdata_r1;
+  logic              pm_stall;
 
-  // Transcoder
-  logic               tr_req;
-  logic [POLY_W-1:0]  tr_poly_id;
-  logic [COEFF_W-1:0] tr_coeff_idx;
-  logic               tr_we;
-  logic [W-1:0]       tr_wdata;
-  logic [W-1:0]       tr_rdata;
-  logic               tr_stall;
+  // Pack/Unpack
+  logic              pu_req;
+  logic [BANK_W-1:0] pu_bank;
+  logic              pu_we;
+  logic [ADDR_W-1:0] pu_addr;
+  logic [W-1:0]      pu_wdata;
+  logic [W-1:0]      pu_rdata;
+  logic              pu_stall;
 
-  mem_frontend_top #(
+  poly_mem_subsystem #(
     .NUM_BANKS(NUM_BANKS),
-    .NUM_POLYS(NUM_POLYS),
-    .NCOEFF(NCOEFF),
     .N(N),
     .W(W),
     .ADDR_W(ADDR_W)
@@ -58,29 +53,34 @@ module mem_frontend_top_tb;
     .wipe_i(wipe_i),
     .wipe_done_o(wipe_done_o),
 
-    .pau_req(pau_req),
-    .pau_poly_id(pau_poly_id),
-    .pau_coeff_idx(pau_coeff_idx),
-    .pau_we(pau_we),
-    .pau_wdata(pau_wdata),
-    .pau_rdata(pau_rdata),
-    .pau_stall(pau_stall),
+    .ntt_req(ntt_req),
+    .ntt_bank(ntt_bank),
+    .ntt_we(ntt_we),
+    .ntt_addr(ntt_addr),
+    .ntt_wdata(ntt_wdata),
+    .ntt_rdata(ntt_rdata),
+    .ntt_stall(ntt_stall),
 
-    .hsu_req(hsu_req),
-    .hsu_poly_id(hsu_poly_id),
-    .hsu_coeff_idx(hsu_coeff_idx),
-    .hsu_we(hsu_we),
-    .hsu_wdata(hsu_wdata),
-    .hsu_rdata(hsu_rdata),
-    .hsu_stall(hsu_stall),
+    .pm_req(pm_req),
+    .pm_bank_r0(pm_bank_r0),
+    .pm_addr_r0(pm_addr_r0),
+    .pm_rdata_r0(pm_rdata_r0),
+    .pm_bank_r1(pm_bank_r1),
+    .pm_addr_r1(pm_addr_r1),
+    .pm_rdata_r1(pm_rdata_r1),
+    .pm_bank_w(pm_bank_w),
+    .pm_we(pm_we),
+    .pm_addr_w(pm_addr_w),
+    .pm_wdata(pm_wdata),
+    .pm_stall(pm_stall),
 
-    .tr_req(tr_req),
-    .tr_poly_id(tr_poly_id),
-    .tr_coeff_idx(tr_coeff_idx),
-    .tr_we(tr_we),
-    .tr_wdata(tr_wdata),
-    .tr_rdata(tr_rdata),
-    .tr_stall(tr_stall)
+    .pu_req(pu_req),
+    .pu_bank(pu_bank),
+    .pu_we(pu_we),
+    .pu_addr(pu_addr),
+    .pu_wdata(pu_wdata),
+    .pu_rdata(pu_rdata),
+    .pu_stall(pu_stall)
   );
 
   initial clk = 1'b0;
@@ -93,33 +93,37 @@ module mem_frontend_top_tb;
     end
   endtask
 
-  task automatic clear_all;
+  task automatic clear_inputs;
     begin
-      wipe_i = 1'b0;
+      wipe_i    = 1'b0;
 
-      pau_req       = 1'b0;
-      pau_poly_id   = '0;
-      pau_coeff_idx = '0;
-      pau_we        = 1'b0;
-      pau_wdata     = '0;
+      ntt_req   = 1'b0;
+      ntt_bank  = '0;
+      ntt_we    = 1'b0;
+      ntt_addr  = '0;
+      ntt_wdata = '0;
 
-      hsu_req       = 1'b0;
-      hsu_poly_id   = '0;
-      hsu_coeff_idx = '0;
-      hsu_we        = 1'b0;
-      hsu_wdata     = '0;
+      pm_req     = 1'b0;
+      pm_bank_r0 = '0;
+      pm_bank_r1 = '0;
+      pm_bank_w  = '0;
+      pm_we      = 1'b0;
+      pm_addr_r0 = '0;
+      pm_addr_r1 = '0;
+      pm_addr_w  = '0;
+      pm_wdata   = '0;
 
-      tr_req        = 1'b0;
-      tr_poly_id    = '0;
-      tr_coeff_idx  = '0;
-      tr_we         = 1'b0;
-      tr_wdata      = '0;
+      pu_req   = 1'b0;
+      pu_bank  = '0;
+      pu_we    = 1'b0;
+      pu_addr  = '0;
+      pu_wdata = '0;
     end
   endtask
 
   task automatic reset_all;
     begin
-      clear_all();
+      clear_inputs();
       rst_n = 1'b0;
       repeat (3) tick();
       rst_n = 1'b1;
@@ -128,202 +132,125 @@ module mem_frontend_top_tb;
   endtask
 
   // ------------------------------------------------------------
-  // PAU write/read through shared NTT-side path
+  // Write a pattern into one bank using NTT writes
   // ------------------------------------------------------------
-  task automatic pau_write(
-    input int poly_id,
-    input int coeff_idx,
-    input logic [W-1:0] data
-  );
+  task automatic write_ramp(input int bank, input int count);
+    int i;
     begin
+      for (i = 0; i < count; i++) begin
+        @(posedge clk);
+        ntt_req   <= 1'b1;
+        ntt_bank  <= BANK_W'(bank);
+        ntt_we    <= 1'b1;
+        ntt_addr  <= ADDR_W'(i);
+        ntt_wdata <= W'(i*3 + 7);
+      end
       @(posedge clk);
-      pau_req       <= 1'b1;
-      pau_poly_id   <= POLY_W'(poly_id);
-      pau_coeff_idx <= COEFF_W'(coeff_idx);
-      pau_we        <= 1'b1;
-      pau_wdata     <= data;
-
-      @(posedge clk);
-      pau_req   <= 1'b0;
-      pau_we    <= 1'b0;
-      pau_wdata <= '0;
+      ntt_req <= 1'b0;
+      ntt_we  <= 1'b0;
     end
   endtask
 
-  task automatic pau_read_check(
-    input int poly_id,
-    input int coeff_idx,
+  // ------------------------------------------------------------
+  // Read back one location and verify 1-cycle latency
+  // ------------------------------------------------------------
+  task automatic check_ntt_read_latency(
+    input int bank,
+    input int addr,
     input logic [W-1:0] exp_data
   );
     begin
+      // Issue read request at cycle T
       @(posedge clk);
-      pau_req       <= 1'b1;
-      pau_poly_id   <= POLY_W'(poly_id);
-      pau_coeff_idx <= COEFF_W'(coeff_idx);
-      pau_we        <= 1'b0;
+      ntt_req  <= 1'b1;
+      ntt_bank <= BANK_W'(bank);
+      ntt_we   <= 1'b0;
+      ntt_addr <= ADDR_W'(addr);
 
+      // At T itself, data is not yet the returned value we want
+      #1;
+
+      // At T+1, returned data should appear
       @(posedge clk);
       #1;
-      if (pau_rdata !== exp_data) begin
-        $fatal(1, "PAU read mismatch: poly=%0d coeff=%0d got=%0h exp=%0h",
-               poly_id, coeff_idx, pau_rdata, exp_data);
+      if (ntt_rdata !== exp_data) begin
+        $fatal(1, "NTT read latency check failed: bank=%0d addr=%0d got=%0h exp=%0h",
+               bank, addr, ntt_rdata, exp_data);
       end
 
+      // Clear request
       @(posedge clk);
-      pau_req <= 1'b0;
+      ntt_req <= 1'b0;
     end
   endtask
 
   // ------------------------------------------------------------
-  // HSU write/read through shared NTT-side path
+  // Port A battle: NTT vs PM write vs PU on same bank
+  // Expect NTT wins, PM and PU stall
   // ------------------------------------------------------------
-  task automatic hsu_write(
-    input int poly_id,
-    input int coeff_idx,
-    input logic [W-1:0] data
-  );
+  task automatic port_a_priority_battle(input int bank);
     begin
       @(posedge clk);
-      hsu_req       <= 1'b1;
-      hsu_poly_id   <= POLY_W'(poly_id);
-      hsu_coeff_idx <= COEFF_W'(coeff_idx);
-      hsu_we        <= 1'b1;
-      hsu_wdata     <= data;
+      ntt_req   <= 1'b1;
+      ntt_bank  <= BANK_W'(bank);
+      ntt_we    <= 1'b1;
+      ntt_addr  <= ADDR_W'(10);
+      ntt_wdata <= 16'h1111;
 
-      @(posedge clk);
-      hsu_req   <= 1'b0;
-      hsu_we    <= 1'b0;
-      hsu_wdata <= '0;
-    end
-  endtask
+      pm_req     <= 1'b1;
+      pm_bank_w  <= BANK_W'(bank);
+      pm_we      <= 1'b1;
+      pm_addr_w  <= ADDR_W'(11);
+      pm_wdata   <= 16'h2222;
+      pm_bank_r0 <= BANK_W'((bank+1) % NUM_BANKS);
+      pm_addr_r0 <= ADDR_W'(0);
+      pm_bank_r1 <= BANK_W'((bank+2) % NUM_BANKS);
+      pm_addr_r1 <= ADDR_W'(0);
 
-  task automatic hsu_read_check(
-    input int poly_id,
-    input int coeff_idx,
-    input logic [W-1:0] exp_data
-  );
-    begin
-      @(posedge clk);
-      hsu_req       <= 1'b1;
-      hsu_poly_id   <= POLY_W'(poly_id);
-      hsu_coeff_idx <= COEFF_W'(coeff_idx);
-      hsu_we        <= 1'b0;
-
-      @(posedge clk);
-      #1;
-      if (hsu_rdata !== exp_data) begin
-        $fatal(1, "HSU read mismatch: poly=%0d coeff=%0d got=%0h exp=%0h",
-               poly_id, coeff_idx, hsu_rdata, exp_data);
-      end
-
-      @(posedge clk);
-      hsu_req <= 1'b0;
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Transcoder write/read through PU path
-  // ------------------------------------------------------------
-  task automatic tr_write(
-    input int poly_id,
-    input int coeff_idx,
-    input logic [W-1:0] data
-  );
-    begin
-      @(posedge clk);
-      tr_req       <= 1'b1;
-      tr_poly_id   <= POLY_W'(poly_id);
-      tr_coeff_idx <= COEFF_W'(coeff_idx);
-      tr_we        <= 1'b1;
-      tr_wdata     <= data;
-
-      @(posedge clk);
-      tr_req   <= 1'b0;
-      tr_we    <= 1'b0;
-      tr_wdata <= '0;
-    end
-  endtask
-
-  task automatic tr_read_check(
-    input int poly_id,
-    input int coeff_idx,
-    input logic [W-1:0] exp_data
-  );
-    begin
-      @(posedge clk);
-      tr_req       <= 1'b1;
-      tr_poly_id   <= POLY_W'(poly_id);
-      tr_coeff_idx <= COEFF_W'(coeff_idx);
-      tr_we        <= 1'b0;
-
-      @(posedge clk);
-      #1;
-      if (tr_rdata !== exp_data) begin
-        $fatal(1, "TR read mismatch: poly=%0d coeff=%0d got=%0h exp=%0h",
-               poly_id, coeff_idx, tr_rdata, exp_data);
-      end
-
-      @(posedge clk);
-      tr_req <= 1'b0;
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Arbitration check: PAU beats HSU on shared NTT-side path
-  // ------------------------------------------------------------
-  task automatic arbitration_priority_check;
-    begin
-      @(posedge clk);
-      pau_req       <= 1'b1;
-      pau_poly_id   <= 5;
-      pau_coeff_idx <= 8;
-      pau_we        <= 1'b1;
-      pau_wdata     <= 16'h1111;
-
-      hsu_req       <= 1'b1;
-      hsu_poly_id   <= 6;
-      hsu_coeff_idx <= 12;
-      hsu_we        <= 1'b1;
-      hsu_wdata     <= 16'h2222;
+      pu_req   <= 1'b1;
+      pu_bank  <= BANK_W'(bank);
+      pu_we    <= 1'b1;
+      pu_addr  <= ADDR_W'(12);
+      pu_wdata <= 16'h3333;
 
       #1;
-      if (pau_stall !== 1'b0) $fatal(1, "PAU should win arbitration");
-      if (hsu_stall !== 1'b1) $fatal(1, "HSU should stall under PAU");
+      if (ntt_stall !== 1'b0)
+        $fatal(1, "Expected NTT to win Port A arbitration");
+      if (pm_stall !== 1'b1)
+        $fatal(1, "Expected PM write to stall under Port A conflict");
+      if (pu_stall !== 1'b1)
+        $fatal(1, "Expected PU to stall under Port A conflict");
 
       @(posedge clk);
-      clear_all();
+      clear_inputs();
     end
   endtask
 
   // ------------------------------------------------------------
-  // PU path should be independent of NTT-side arbitration
+  // PolyMul same-bank dual-read conflict
+  // Expect full stall
   // ------------------------------------------------------------
-  task automatic transcoder_parallel_check;
+  task automatic force_same_bank_read_conflict(input int bank);
     begin
       @(posedge clk);
-      pau_req       <= 1'b1;
-      pau_poly_id   <= 2;
-      pau_coeff_idx <= 20;
-      pau_we        <= 1'b1;
-      pau_wdata     <= 16'hAAAA;
-
-      tr_req        <= 1'b1;
-      tr_poly_id    <= 9;
-      tr_coeff_idx  <= 14;
-      tr_we         <= 1'b1;
-      tr_wdata      <= 16'hBBBB;
+      pm_req     <= 1'b1;
+      pm_bank_r0 <= BANK_W'(bank);
+      pm_addr_r0 <= ADDR_W'(1);
+      pm_bank_r1 <= BANK_W'(bank);
+      pm_addr_r1 <= ADDR_W'(2);
+      pm_we      <= 1'b0;
 
       #1;
-      if (pau_stall !== 1'b0) $fatal(1, "PAU should not stall here");
-      if (tr_stall  !== 1'b0) $fatal(1, "TR should not stall here");
+      if (!pm_stall)
+        $fatal(1, "Expected pm_stall on same-bank dual-read conflict!");
 
       @(posedge clk);
-      clear_all();
+      clear_inputs();
     end
   endtask
 
   // ------------------------------------------------------------
-  // Wipe through frontend
+  // Wipe test: trigger wipe and wait for done
   // ------------------------------------------------------------
   task automatic run_wipe;
     begin
@@ -338,32 +265,45 @@ module mem_frontend_top_tb;
     end
   endtask
 
+  // ------------------------------------------------------------
+  // Verify random-ish sample addresses are all zero after wipe
+  // Since subsystem exposes NTT/PU reads on Port A, use NTT reads.
+  // ------------------------------------------------------------
+  task automatic verify_wipe_integrity;
+    logic [W-1:0] rd;
+    begin
+      // Sample several addresses across all banks
+      check_ntt_read_latency(0, 0,     16'h0000);
+      check_ntt_read_latency(1, 5,     16'h0000);
+      check_ntt_read_latency(2, 37,    16'h0000);
+      check_ntt_read_latency(3, 99,    16'h0000);
+      check_ntt_read_latency(0, 255,   16'h0000);
+      check_ntt_read_latency(1, 511,   16'h0000);
+      check_ntt_read_latency(2, 1023,  16'h0000);
+      check_ntt_read_latency(3, 2047,  16'h0000);
+    end
+  endtask
+
   initial begin
     reset_all();
 
-    // 1) PAU path
-    pau_write(3, 9, 16'hA5A5);
-    pau_read_check(3, 9, 16'hA5A5);
+    // 1) preload some data so wipe actually matters
+    write_ramp(0, 32);
+    write_ramp(1, 16);
 
-    // 2) HSU path
-    hsu_write(10, 17, 16'h5A5A);
-    hsu_read_check(10, 17, 16'h5A5A);
+    // 2) verify 1-cycle latency on readback
+    check_ntt_read_latency(0, 4, 16'(4*3 + 7));   // 19
+    check_ntt_read_latency(1, 3, 16'(3*3 + 7));   // 16
 
-    // 3) TR path
-    tr_write(7, 21, 16'h1234);
-    tr_read_check(7, 21, 16'h1234);
+    // 3) high-stress Port A arbitration
+    port_a_priority_battle(2);
 
-    // 4) Shared-path arbitration
-    arbitration_priority_check();
+    // 4) same-bank PolyMul read conflict
+    force_same_bank_read_conflict(0);
 
-    // 5) Parallel PAU + Transcoder
-    transcoder_parallel_check();
-
-    // 6) Wipe and verify
+    // 5) wipe and verify memory is really zero
     run_wipe();
-    pau_read_check(3, 9, 16'h0000);
-    hsu_read_check(10, 17, 16'h0000);
-    tr_read_check(7, 21, 16'h0000);
+    verify_wipe_integrity();
 
     $display("TB PASS");
     $finish;
