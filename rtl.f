@@ -4,6 +4,7 @@
 rtl/qrem_mem_map_pkg.sv
 
 # 3. Local RTL (i.e., rtl/transcoder_unit.sv)
+rtl/delay_n.sv
 rtl/cmi.sv
 rtl/mem_addr_map.sv
 rtl/mem_arbiter.sv
