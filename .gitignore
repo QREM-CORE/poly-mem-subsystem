@@ -5,3 +5,6 @@ transcript
 *.log
 *.txt
 build/*
+build.f
+*.do
+*.dovlog
