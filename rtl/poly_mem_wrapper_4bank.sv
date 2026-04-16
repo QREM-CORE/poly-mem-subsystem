@@ -1,24 +1,20 @@
-/* ================================================================
- * 4-Bank Polynomial Memory Wrapper (fixed)
- * ------------------------------------------------
- *
+/*
  * Module Name: poly_mem_wrapper_4bank
  * Author(s): Mavra Muzmmal, Jessica Buentipo
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Responsibility:
+ *     - Map logical coefficient indices -> {bank, local bank addr}
+ *     - Detect illegal same-cycle multi-read / multi-write bank conflicts
+ *     - Issue RAM accesses to 4 banked memories
+ *     - Return read response ONE cycle later with aligned metadata
  *
- * Responsibilities:
- *   - Map logical coefficient indices -> {bank, local bank addr}
- *   - Detect illegal same-cycle multi-read / multi-write bank conflicts
- *   - Issue RAM accesses to 4 banked memories
- *   - Return read response ONE cycle later with aligned metadata
- *
- * Notes:
- *   - Port A of each bank is used for reads
- *   - Port B of each bank is used for writes
- *   - Read response latency = 1 cycle from accepted request
- *   - A request is accepted when: v_i && ready_o
- * ================================================================
-*/
+ *   Notes:
+ *     - Port A of each bank is used for reads
+ *     - Port B of each bank is used for writes
+ *     - Read response latency = 1 cycle from accepted request
+ *     - A request is accepted when: v_i && ready_o
+ */
 
 module poly_mem_wrapper_4bank #(
   parameter int N         = 256,

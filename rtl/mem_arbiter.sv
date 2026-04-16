@@ -1,21 +1,23 @@
-// ================================================================
-// mem_arbiter
-// ------------------------------------------------
-// Front-end priority arbiter for memory access.
-//
-// Priority:
-//   1. PAU
-//   2. HSU
-//   3. Transcoder
-//
-// This version also propagates memory-subsystem stall feedback
-// to the currently selected client.
-//
-// Notes:
-//   - Lower-priority active clients are stalled.
-//   - If the selected client is blocked by the memory subsystem,
-//     its stall output is also asserted.
-// ================================================================
+/*
+ * Module Name: mem_arbiter
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Front-end priority arbiter for memory access.
+ *
+ *   Priority:
+ *     1. PAU
+ *     2. HSU
+ *     3. Transcoder
+ *
+ *   This version also propagates memory-subsystem stall feedback
+ *   to the currently selected client.
+ *
+ *   Notes:
+ *     - Lower-priority active clients are stalled.
+ *     - If the selected client is blocked by the memory subsystem,
+ *       its stall output is also asserted.
+ */
 module mem_arbiter #(
   parameter int NUM_BANKS = 4,
   parameter int ADDR_W    = 11,

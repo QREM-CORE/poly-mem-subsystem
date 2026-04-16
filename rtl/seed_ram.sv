@@ -1,16 +1,19 @@
-// ===============================================================
-// Description:
-// Simple synchronous RAM used to store seed values.
-// The memory supports one read and one write per clock cycle.
-// If write enable (we) is asserted, data is written to the
-// specified address. The read is synchronous and returns the
-// value stored at the given address.
-//
-// Parameters:
-//   DEPTH   : Number of memory locations
-//   W       : Width of each memory word
-//   ADDR_W  : Width of the address bus (log2 of DEPTH)
-// ===============================================================
+/*
+ * Module Name: seed_ram
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Simple synchronous RAM used to store seed values.
+ *   The memory supports one read and one write per clock cycle.
+ *   If write enable (we) is asserted, data is written to the
+ *   specified address. The read is synchronous and returns the
+ *   value stored at the given address.
+ *
+ *   Parameters:
+ *     DEPTH   : Number of memory locations
+ *     W       : Width of each memory word
+ *     ADDR_W  : Width of the address bus (log2 of DEPTH)
+ */
 
 module seed_ram #(
   parameter int DEPTH   = 16,                 // Total number of memory entries

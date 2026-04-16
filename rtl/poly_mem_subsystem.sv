@@ -1,21 +1,24 @@
-// ================================================================
-// poly_mem_subsystem
-// ------------------------------------------------
-// Memory subsystem for polynomial storage.
-//
-// Features:
-//   - 4 banked dual-port RAMs
-//   - Port A shared by NTT / PolyMul write / Pack-Unpack
-//   - Port B used by PolyMul reads
-//   - Synchronous read steering fix using delayed accepted bank tags
-//   - Security wipe FSM that zeroes all banks
-//
-// Notes:
-//   - N = rows per bank
-//   - For 32 polynomial slots:
-//       256 coeff/poly / 4 banks = 64 rows/poly/bank
-//       32 polys * 64 rows = 2048 rows per bank
-// ================================================================
+/*
+ * Module Name: poly_mem_subsystem
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Memory subsystem for polynomial storage.
+ *
+ *   Features:
+ *     - 4 banked dual-port RAMs
+ *     - Port A shared by NTT / PolyMul write / Pack-Unpack
+ *     - Port B used by PolyMul reads
+ *     - Synchronous read steering fix using delayed accepted bank tags
+ *     - Security wipe FSM that zeroes all banks
+ *
+ *   Notes:
+ *     - N = rows per bank
+ *     - For 32 polynomial slots:
+ *         256 coeff/poly / 4 banks = 64 rows/poly/bank
+ *         32 polys * 64 rows = 2048 rows per bank
+ */
+
 module poly_mem_subsystem #(
   parameter int NUM_BANKS = 4,
   parameter int N         = 2048,

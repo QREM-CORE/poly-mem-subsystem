@@ -1,25 +1,27 @@
-// ================================================================
-// mem_addr_map
-// ------------------------------------------------
-// Converts logical polynomial coordinates into physical memory
-// coordinates for the banked memory subsystem.
-//
-// Logical view:
-//   - poly_id   : which polynomial slot (0..31)
-//   - coeff_idx : coefficient index inside that polynomial (0..255)
-//
-// Physical view:
-//   - bank : which of the 4 banks
-//   - addr : row address inside the bank RAM
-//
-// Mapping:
-//   bank = coeff_idx[1:0]
-//   row  = coeff_idx[7:2]
-//
-// Each polynomial occupies 64 rows per bank.
-// Final address:
-//   addr = poly_id * 64 + row
-// ================================================================
+/*
+ * Module Name: mem_addr_map
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Converts logical polynomial coordinates into physical memory
+ *   coordinates for the banked memory subsystem.
+ *
+ *   Logical view:
+ *     - poly_id   : which polynomial slot (0..31)
+ *     - coeff_idx : coefficient index inside that polynomial (0..255)
+ *
+ *   Physical view:
+ *     - bank : which of the 4 banks
+ *     - addr : row address inside the bank RAM
+ *
+ *   Mapping:
+ *     bank = coeff_idx[1:0]
+ *     row  = coeff_idx[7:2]
+ *
+ *   Each polynomial occupies 64 rows per bank.
+ *   Final address:
+ *     addr = poly_id * 64 + row
+ */
 module mem_addr_map #(
   parameter int NUM_BANKS          = 4,
   parameter int NUM_POLYS          = 32,

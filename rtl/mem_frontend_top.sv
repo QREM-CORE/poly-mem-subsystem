@@ -1,26 +1,29 @@
-// ================================================================
-// mem_frontend_top
-// ------------------------------------------------
-// Logical memory front-end for the QREM memory plane.
-//
-// Clients provide:
-//   - poly_id
-//   - coeff_idx
-//   - req / we / wdata
-//
-// This module performs:
-//   1. logical -> physical address mapping
-//   2. arbitration for the shared NTT-side path (PAU > HSU)
-//   3. direct connection of Transcoder to PU path
-//   4. connection into poly_mem_subsystem
-//
-// Notes:
-//   - PAU and HSU currently share the NTT-side path.
-//   - Transcoder uses the PU path directly.
-//   - A true PAU->PM-path integration would require a richer PAU
-//     interface (2 read indices + 1 writeback path), which is not
-//     present in the current top-level client interface.
-// ================================================================
+/*
+ * Module Name: mem_frontend_top
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   Logical memory front-end for the QREM memory plane.
+ *
+ *   Clients provide:
+ *     - poly_id
+ *     - coeff_idx
+ *     - req / we / wdata
+ *
+ *   This module performs:
+ *     1. logical -> physical address mapping
+ *     2. arbitration for the shared NTT-side path (PAU > HSU)
+ *     3. direct connection of Transcoder to PU path
+ *     4. connection into poly_mem_subsystem
+ *
+ *   Notes:
+ *     - PAU and HSU currently share the NTT-side path.
+ *     - Transcoder uses the PU path directly.
+ *     - A true PAU->PM-path integration would require a richer PAU
+ *       interface (2 read indices + 1 writeback path), which is not
+ *       present in the current top-level client interface.
+ */
+
 module mem_frontend_top #(
   parameter int NUM_BANKS = 4,
   parameter int NUM_POLYS = 32,

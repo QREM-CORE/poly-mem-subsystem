@@ -1,24 +1,27 @@
-// ============================================================================
-// Purpose:
-//   This module implements a single dual-port RAM bank used for storing
-//   polynomial coefficients.
-//
-// Key Features:
-//   - Depth: N entries
-//   - Width: W bits per entry
-//   - Two independent ports (Port A and Port B)
-//   - Each port can read or write in the same clock cycle
-//   - Reads are synchronous (data returned on next clock)
-//
-// Why we need this:
-//   Higher-level modules (like poly_mem_wrapper_4bank or poly_mem_subsystem)
-//   connect several of these banks together to allow parallel access to
-//   polynomial coefficients.
-//
-// Example:
-//   If N = 256 and W = 16,
-//   this bank stores 256 coefficients, each 16 bits wide.
-// ============================================================================
+/*
+ * Module Name: poly_ram_bank
+ * Author(s): Mavra Muzmmal
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ * Description:
+ *   This module implements a single dual-port RAM bank used for storing
+ *   polynomial coefficients.
+ *
+ *   Key Features:
+ *     - Depth: N entries
+ *     - Width: W bits per entry
+ *     - Two independent ports (Port A and Port B)
+ *     - Each port can read or write in the same clock cycle
+ *     - Reads are synchronous (data returned on next clock)
+ *
+ *   Why we need this:
+ *     Higher-level modules (like poly_mem_wrapper_4bank or poly_mem_subsystem)
+ *     connect several of these banks together to allow parallel access to
+ *     polynomial coefficients.
+ *
+ *   Example:
+ *     If N = 256 and W = 16,
+ *     this bank stores 256 coefficients, each 16 bits wide.
+ */
 
 module poly_ram_bank #(
   parameter int N      = 256,          // Number of memory locations
