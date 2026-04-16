@@ -369,5 +369,4 @@ module mem_frontend_top_tb;
     $finish;
   end
 
-endmodulevlog -work work -sv rtl/poly_ram_bank.sv rtl/poly_mem_subsystem.sv rtl/mem_arbiter.sv rtl/mem_addr_map.sv rtl/mem_frontend_top.sv tb/mem_frontend_top_tb.sv
-vsim -c -do run_mem_frontend.do work.mem_frontend_top_tb
+endmodule

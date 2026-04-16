@@ -28,4 +28,4 @@ cmi DUT (
     .mem_ready_i            ()
 );
 
-endmodule;
+endmodule
