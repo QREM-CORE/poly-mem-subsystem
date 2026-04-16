@@ -1,0 +1,9 @@
+/home/kiet/repos/poly-mem-subsystem/rtl/qrem_mem_map_pkg.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/cmi.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/mem_addr_map.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/mem_arbiter.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/poly_ram_bank.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/seed_ram.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/poly_mem_wrapper_4bank.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/poly_mem_subsystem.sv
+/home/kiet/repos/poly-mem-subsystem/rtl/mem_frontend_top.sv
