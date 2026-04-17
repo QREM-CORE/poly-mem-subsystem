@@ -1,6 +1,6 @@
 /*
  * Module Name: mem_frontend_top
- * Author(s): OpenAI Codex
+ * Author(s): Quardin Lyttle
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
  *
  * Description:
