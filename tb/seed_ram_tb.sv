@@ -7,7 +7,7 @@ module seed_ram_tb;
   localparam int ADDR_W = $clog2(DEPTH);
 
   logic              clk;
-  logic              rst_n;
+  logic              rst;
   logic              we;
   logic [ADDR_W-1:0] addr;
   logic [W-1:0]      wdata;
@@ -19,7 +19,7 @@ module seed_ram_tb;
     .ADDR_W(ADDR_W)
   ) dut (
     .clk(clk),
-    .rst_n(rst_n),
+    .rst(rst),
     .we(we),
     .addr(addr),
     .wdata(wdata),
@@ -38,14 +38,14 @@ module seed_ram_tb;
   endtask
 
   initial begin
-    rst_n = 1'b0;
+    rst = 1'b0;
     we    = 1'b0;
     addr  = '0;
     wdata = '0;
 
     // reset phase
     repeat (3) tick();
-    rst_n = 1'b1;
+    rst = 1'b1;
     tick();
 
     // --------------------------

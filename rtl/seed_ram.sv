@@ -24,7 +24,7 @@ module seed_ram #(
   input  logic              clk,
 
   // Active-low reset (currently unused but kept for system consistency)
-  input  logic              rst_n,
+  input  logic              rst,
 
   // Write enable signal
   // When 'we' = 1, data will be written into memory

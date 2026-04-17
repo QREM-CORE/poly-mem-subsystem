@@ -32,7 +32,7 @@ module poly_mem_wrapper_4bank #(
   parameter int NUM_POLYS = 4
 )(
   input  logic clk,
-  input  logic rst_n,
+  input  logic rst,
 
   // ---------------------------
   // Request side
@@ -224,7 +224,7 @@ module poly_mem_wrapper_4bank #(
         .ADDR_W(BANK_AW)
       ) u_bank (
         .clk   (clk),
-        .rst_n (rst_n),
+        .rst   (rst),
 
         .a_we    (a_we[b]),
         .a_addr  (a_addr[b]),
@@ -251,8 +251,8 @@ module poly_mem_wrapper_4bank #(
   logic [3:0]                   rd_lane_valid_r;
   logic [3:0][1:0]              rd_bank_r;
 
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+  always_ff @(posedge clk or negedge rst) begin
+    if (!rst) begin
       rd_valid_r      <= 1'b0;
       rd_poly_id_r    <= '0;
       rd_idx_r        <= '0;

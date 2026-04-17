@@ -55,7 +55,7 @@ module poly_mem_subsystem #(
   parameter int SEED_W     = 64
 )(
   input  logic clk,
-  input  logic rst_n,
+  input  logic rst,
 
   // ------------------------------------------------------------
   // Security wipe
@@ -404,7 +404,7 @@ module poly_mem_subsystem #(
     .NUM_POLYS (NUM_POLYS)
   ) u_poly_mem (
     .clk             (clk),
-    .rst_n           (rst_n),
+    .rst             (rst),
     .poly_id_i       (poly_id_mux),
     .v_i             (poly_req_mux),
     .rd_en_i         (poly_rd_en_mux),
@@ -432,7 +432,7 @@ module poly_mem_subsystem #(
     .ADDR_W (SEED_AW)
   ) u_seed_ram (
     .clk   (clk),
-    .rst_n (rst_n),
+    .rst   (rst),
     .we    (seed_we_mux),
     .addr  (seed_addr_mux),
     .wdata (seed_wdata_mux),
@@ -556,8 +556,8 @@ module poly_mem_subsystem #(
   // ============================================================
   // Sequential state
   // ============================================================
-  always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+  always_ff @(posedge clk or negedge rst) begin
+    if (!rst) begin
       wipe_state_q     <= WIPE_IDLE;
       wipe_poly_q      <= '0;
       wipe_row_q       <= '0;

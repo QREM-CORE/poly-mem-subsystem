@@ -7,7 +7,7 @@ module poly_mem_wrapper_4bank_tb;
   parameter int NUM_POLYS = 4;
 
   logic clk;
-  logic rst_n;
+  logic rst;
 
   logic [$clog2(NUM_POLYS)-1:0] poly_id_i;
   logic                         v_i;
@@ -34,7 +34,7 @@ module poly_mem_wrapper_4bank_tb;
     .NUM_POLYS(NUM_POLYS)
   ) DUT (
     .clk                 (clk),
-    .rst_n               (rst_n),
+    .rst                 (rst),
     .poly_id_i           (poly_id_i),
     .v_i                 (v_i),
     .rd_en_i             (rd_en_i),
@@ -57,7 +57,7 @@ module poly_mem_wrapper_4bank_tb;
 
   initial begin
     // Reset / init
-    rst_n           = 1'b0;
+    rst             = 1'b0;
     poly_id_i       = '0;
     v_i             = 1'b0;
     rd_en_i         = 1'b0;
@@ -68,7 +68,7 @@ module poly_mem_wrapper_4bank_tb;
     wr_data_i       = '0;
 
     #20;
-    rst_n = 1'b1;
+    rst = 1'b1;
 
     // --------------------------------------------------
     // WRITE 4 values to 4 indices that should map cleanly

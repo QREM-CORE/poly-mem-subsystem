@@ -13,7 +13,7 @@ module mem_frontend_top_tb;
   localparam int SEED_AW    = $clog2(SEED_DEPTH);
 
   logic clk;
-  logic rst_n;
+  logic rst;
 
   logic wipe_i;
   logic wipe_done_o;
@@ -83,7 +83,7 @@ module mem_frontend_top_tb;
     .SEED_W     (SEED_W)
   ) dut (
     .clk                (clk),
-    .rst_n              (rst_n),
+    .rst                (rst),
     .wipe_i             (wipe_i),
     .wipe_done_o        (wipe_done_o),
     .pau_req            (pau_req),
@@ -188,9 +188,9 @@ module mem_frontend_top_tb;
   task automatic reset_all;
     begin
       clear_all();
-      rst_n = 1'b0;
+      rst = 1'b0;
       repeat (3) tick();
-      rst_n = 1'b1;
+      rst = 1'b1;
       repeat (2) tick();
     end
   endtask

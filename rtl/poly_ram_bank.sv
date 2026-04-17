@@ -29,7 +29,7 @@ module poly_ram_bank #(
   parameter int ADDR_W = $clog2(N)     // Address width needed for N entries
 )(
   input  logic              clk,       // System clock
-  input  logic              rst_n,     // Active-low reset (not used internally here)
+  input  logic              rst,       // Active-low reset (not used internally here)
 
   // --------------------------------------------------------------------------
   // PORT A (first memory port)
