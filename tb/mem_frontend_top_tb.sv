@@ -1,6 +1,7 @@
 `timescale 1ns/1ps
 
 module mem_frontend_top_tb;
+// DUT is now poly_mem_subsystem (mem_frontend_top was merged into it).
 
   localparam int NUM_POLYS  = 32;
   localparam int NCOEFF     = 256;
@@ -74,7 +75,7 @@ module mem_frontend_top_tb;
   logic                           seed_rvalid;
   logic [SEED_W-1:0]              seed_rdata;
 
-  mem_frontend_top #(
+  poly_mem_subsystem #(
     .NUM_POLYS  (NUM_POLYS),
     .NCOEFF     (NCOEFF),
     .W          (W),

@@ -2,16 +2,26 @@
  * Module Name: poly_mem_wrapper_4bank
  * Author(s): Mavra Muzmmal, Jessica Buentipo
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
+ * Reference:
+ *   "Highly-Efficient Hardware Architecture for ML-KEM PQC Standard"
+ *   H. Jung, Q. D. Truong, H. Lee — IEEE OJCAS 2025
+ *
  * Description:
+ *   Implements Poly Port A (read path) and Poly Port B (write path)
+ *   to the 4 banked Poly RAMs in the Memory Subsystem.
+ *
  *   Responsibility:
- *     - Map logical coefficient indices -> {bank, local bank addr}
+ *     - Map logical coefficient indices → {bank, local bank addr} using
+ *       the CMI (Conflict-Free Memory Interface) bit-pair-sum scheme:
+ *         bank = (idx[1:0] + idx[3:2] + idx[5:4] + idx[7:6]) mod 4
+ *       This ensures NTT butterfly access patterns are conflict-free.
  *     - Detect illegal same-cycle multi-read / multi-write bank conflicts
- *     - Issue RAM accesses to 4 banked memories
+ *     - Issue RAM accesses to 4 banked dual-port memories
+ *       (reads → Port A, writes → Port B)
  *     - Return read response ONE cycle later with aligned metadata
  *
  *   Notes:
- *     - Port A of each bank is used for reads
- *     - Port B of each bank is used for writes
  *     - Read response latency = 1 cycle from accepted request
  *     - A request is accepted when: v_i && ready_o
  */

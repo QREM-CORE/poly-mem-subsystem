@@ -1,32 +1,30 @@
 /*
  * Module Name: mem_arbiter
- * Author(s): Quardin Lyttle
+ * Author(s): Mavra Muzmmal, Quardin Lyttle
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
  *
+ * Reference:
+ *   "Highly-Efficient Hardware Architecture for ML-KEM PQC Standard"
+ *   H. Jung, Q. D. Truong, H. Lee — IEEE OJCAS 2025
+ *
  * Description:
- *   Centralized front-end arbiter for the shared polynomial-memory request
- *   plane.
+ *   Centralized priority arbiter for the shared polynomial-memory request
+ *   plane inside the Memory Subsystem.
  *
- * Why this exists:
- *   v0.7 codifies a strict PAU > HSU > Transcoder priority hierarchy for
- *   accesses to the banked polynomial memory. The old frontend partly
- *   arbitrated PAU/HSU and partly let the transcoder bypass that logic,
- *   which split the true ownership rules across multiple modules.
+ *   Implements the Arbitrator block from the reference architecture with
+ *   strict PAU > HSU > Transcoder priority:
+ *     - PAU (Polynomial Arithmetic Unit): highest, NTT/CWM/ADD operations
+ *     - HSU (Hash Sampling Unit): mid, Poly Stream Writer coefficient loads
+ *     - Transcoder: lowest, ByteEncode/Decode and Compress/Decompress
  *
- * New contract:
- *   - Arbitration is strictly centralized here.
- *   - Only one client wins the shared vector transaction slot each cycle.
- *   - The selected client sees downstream stall if the polynomial memory
- *     wrapper cannot accept its request that cycle.
- *   - Lower-priority requesting clients are stalled immediately.
+ *   Only one client wins the shared vector transaction slot each cycle.
+ *   The winning client sees downstream stall if the polynomial memory
+ *   wrapper cannot accept its request. Lower-priority requesting clients
+ *   are stalled immediately.
  *
  * Notes:
- *   - This arbiter chooses an owner only. mem_frontend_top performs the
+ *   - This arbiter chooses an owner only. poly_mem_subsystem performs the
  *     actual request muxing and response routing.
- *   - A more aggressive bank-aware "multiple clients in one cycle" policy
- *     is intentionally not implemented here because the v0.7 snapshot calls
- *     for strict priority and safe backpressure rather than optimistic
- *     concurrency.
  */
 
 module mem_arbiter (

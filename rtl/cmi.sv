@@ -1,5 +1,28 @@
 /*
  * Module Name: cmi (Conflict-Free Memory Interface)
+ * Author(s): Mai Komar
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
+ * Reference:
+ *   "Highly-Efficient Hardware Architecture for ML-KEM PQC Standard"
+ *   H. Jung, Q. D. Truong, H. Lee — IEEE OJCAS 2025
+ *
+ * *** THIS MODULE BELONGS TO THE PAU (Polynomial Arithmetic Unit). ***
+ * It is included in this repository to define the interface contract
+ * between the PAU and the Memory Subsystem's poly_mem_wrapper_4bank.
+ *
+ * Description:
+ *   Adapter between the PAU controller / AU writeback path and the
+ *   Memory Subsystem. The CMI:
+ *     - Forwards 4-lane read requests (coefficient indices + valid flags)
+ *       to the memory wrapper, which handles CMI bank mapping internally
+ *     - Consumes the wrapper's 1-cycle read response and presents
+ *       aligned coefficient data to the AU
+ *     - Aligns writeback indices via configurable delay pipelines
+ *       (2/4/5/9 cycle latency) so write addresses arrive at the memory
+ *       wrapper at the same time as AU result data
+ *     - Allows write-only cycles (no concurrent read) for drain/final
+ *       writeback phases
  *
  * Fixed to match poly_mem_wrapper_4bank.sv:
  * - Wrapper handles bank mapping + read response reordering
