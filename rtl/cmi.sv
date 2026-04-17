@@ -115,10 +115,12 @@ module cmi #(
     logic [3:0][$clog2(N)-1:0] wr_idx_pipe   [0:MAX_WB_LAT];
     logic [3:0]                valid_pipe    [0:MAX_WB_LAT];
 
-    always_comb begin
-        wr_idx_pipe[0] = coeff_idx_i;
-        valid_pipe[0]  = coeff_valid_i;
-    end
+    generate
+        for (genvar i0 = 0; i0 < 4; i0++) begin : G_WB_PIPE_HEAD
+            assign wr_idx_pipe[0][i0] = coeff_idx_i[i0];
+            assign valid_pipe[0][i0]  = coeff_valid_i[i0];
+        end
+    endgenerate
 
     generate
         for (genvar d = 0; d < MAX_WB_LAT; d++) begin : G_WB_PIPE_STAGE

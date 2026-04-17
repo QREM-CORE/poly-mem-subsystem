@@ -1,266 +1,315 @@
 /*
  * Module Name: mem_frontend_top
- * Author(s): Mavra Muzmmal
+ * Author(s): OpenAI Codex
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
  * Description:
- *   Logical memory front-end for the QREM memory plane.
+ *   Top-level memory frontend for the QREM banked polynomial memory.
  *
- *   Clients provide:
- *     - poly_id
- *     - coeff_idx
- *     - req / we / wdata
+ * Architectural intent (v0.7-aligned):
+ *   - Centralize polynomial-memory arbitration.
+ *   - Treat PAU, HSU/poly-writer, and Transcoder as peers on one shared
+ *     vector request plane.
+ *   - Keep the seed store separate from polynomial-memory banking.
+ *   - Preserve strict PAU > HSU > Transcoder priority.
  *
- *   This module performs:
- *     1. logical -> physical address mapping
- *     2. arbitration for the shared NTT-side path (PAU > HSU)
- *     3. direct connection of Transcoder to PU path
- *     4. connection into poly_mem_subsystem
- *
- *   Notes:
- *     - PAU and HSU currently share the NTT-side path.
- *     - Transcoder uses the PU path directly.
- *     - A true PAU->PM-path integration would require a richer PAU
- *       interface (2 read indices + 1 writeback path), which is not
- *       present in the current top-level client interface.
+ * Why this replaced the old version:
+ *   The old frontend only modeled scalar coefficient requests for PAU/HSU and
+ *   let the Transcoder bypass that logic through a different path. That was
+ *   incompatible with the actual architecture:
+ *     - PAU needs a 4-lane vector interface for NTT / ADD / CWM drain
+ *     - HSU writes sampled coefficients in 4-coefficient groups
+ *     - Transcoder is another shared memory client, not a bypass path
+ *     - read responses must be explicitly owned/tagged, not broadcast
  */
 
 module mem_frontend_top #(
-  parameter int NUM_BANKS = 4,
-  parameter int NUM_POLYS = 32,
-  parameter int NCOEFF    = 256,
-  parameter int N         = 2048,
-  parameter int W         = 16,
-  parameter int ADDR_W    = $clog2(N)
+  parameter int NUM_POLYS  = 32,
+  parameter int NCOEFF     = 256,
+  parameter int W          = 16,
+  parameter int SEED_DEPTH = 16,
+  parameter int SEED_W     = 64
 )(
   input  logic clk,
   input  logic rst_n,
 
-  // -------------------------
-  // Wipe control
-  // -------------------------
+  // ------------------------------------------------------------
+  // Security wipe
+  // ------------------------------------------------------------
   input  logic wipe_i,
   output logic wipe_done_o,
 
-  // ==============================================================
-  // PAU interface (logical)
-  // ==============================================================
-  input  logic                         pau_req,
-  input  logic [$clog2(NUM_POLYS)-1:0] pau_poly_id,
-  input  logic [$clog2(NCOEFF)-1:0]    pau_coeff_idx,
-  input  logic                         pau_we,
-  input  logic [W-1:0]                 pau_wdata,
-  output logic [W-1:0]                 pau_rdata,
-  output logic                         pau_stall,
+  // ============================================================
+  // PAU interface (vector request/response)
+  // ============================================================
+  input  logic                               pau_req,
+  input  logic [$clog2(NUM_POLYS)-1:0]       pau_poly_id,
+  input  logic                               pau_rd_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx,
+  input  logic [3:0]                         pau_rd_lane_valid,
+  input  logic [3:0]                         pau_wr_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_wr_idx,
+  input  logic [3:0][W-1:0]                  pau_wr_data,
+  output logic                               pau_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       pau_rd_poly_id,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx_o,
+  output logic [3:0]                         pau_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  pau_rd_data,
+  output logic                               pau_stall,
 
-  // ==============================================================
-  // HSU interface (logical)
-  // ==============================================================
-  input  logic                         hsu_req,
-  input  logic [$clog2(NUM_POLYS)-1:0] hsu_poly_id,
-  input  logic [$clog2(NCOEFF)-1:0]    hsu_coeff_idx,
-  input  logic                         hsu_we,
-  input  logic [W-1:0]                 hsu_wdata,
-  output logic [W-1:0]                 hsu_rdata,
-  output logic                         hsu_stall,
+  // ============================================================
+  // HSU / Poly Memory Writer interface
+  // ============================================================
+  input  logic                               hsu_req,
+  input  logic [$clog2(NUM_POLYS)-1:0]       hsu_poly_id,
+  input  logic                               hsu_rd_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx,
+  input  logic [3:0]                         hsu_rd_lane_valid,
+  input  logic [3:0]                         hsu_wr_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     hsu_wr_idx,
+  input  logic [3:0][W-1:0]                  hsu_wr_data,
+  output logic                               hsu_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       hsu_rd_poly_id,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx_o,
+  output logic [3:0]                         hsu_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  hsu_rd_data,
+  output logic                               hsu_stall,
 
-  // ==============================================================
-  // Transcoder interface (logical)
-  // ==============================================================
-  input  logic                         tr_req,
-  input  logic [$clog2(NUM_POLYS)-1:0] tr_poly_id,
-  input  logic [$clog2(NCOEFF)-1:0]    tr_coeff_idx,
-  input  logic                         tr_we,
-  input  logic [W-1:0]                 tr_wdata,
-  output logic [W-1:0]                 tr_rdata,
-  output logic                         tr_stall
+  // ============================================================
+  // Transcoder interface
+  // ============================================================
+  input  logic                               tr_req,
+  input  logic [$clog2(NUM_POLYS)-1:0]       tr_poly_id,
+  input  logic                               tr_rd_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx,
+  input  logic [3:0]                         tr_rd_lane_valid,
+  input  logic [3:0]                         tr_wr_en,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     tr_wr_idx,
+  input  logic [3:0][W-1:0]                  tr_wr_data,
+  output logic                               tr_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       tr_rd_poly_id,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx_o,
+  output logic [3:0]                         tr_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  tr_rd_data,
+  output logic                               tr_stall,
+
+  // ============================================================
+  // Seed / protocol store port
+  // ------------------------------------------------------------
+  // This is intentionally independent from the polynomial-memory
+  // arbitration path. The top-level seed reader/writer bridge can sit
+  // above this port and multiplex HSU / Transcoder / controller traffic.
+  // ============================================================
+  input  logic                               seed_req,
+  input  logic                               seed_we,
+  input  logic [$clog2(SEED_DEPTH)-1:0]      seed_addr,
+  input  logic [SEED_W-1:0]                  seed_wdata,
+  output logic                               seed_ready,
+  output logic                               seed_rvalid,
+  output logic [SEED_W-1:0]                  seed_rdata
 );
 
-  // ==============================================================
-  // Physical mapped coordinates per client
-  // ==============================================================
-  logic [$clog2(NUM_BANKS)-1:0] pau_bank, hsu_bank, tr_bank;
-  logic [ADDR_W-1:0]            pau_addr, hsu_addr, tr_addr;
+  typedef enum logic [1:0] {
+    RD_OWNER_NONE = 2'd0,
+    RD_OWNER_PAU  = 2'd1,
+    RD_OWNER_HSU  = 2'd2,
+    RD_OWNER_TR   = 2'd3
+  } rd_owner_e;
 
-  // ==============================================================
-  // Shared NTT-side arbiter wires (PAU vs HSU)
-  // ==============================================================
-  logic                         ntt_req_mux;
-  logic [$clog2(NUM_BANKS)-1:0] ntt_bank_mux;
-  logic                         ntt_we_mux;
-  logic [ADDR_W-1:0]            ntt_addr_mux;
-  logic [W-1:0]                 ntt_wdata_mux;
+  logic                               grant_pau;
+  logic                               grant_hsu;
+  logic                               grant_tr;
 
-  logic                         mem_pau_stall;
-  logic                         mem_hsu_stall;
+  logic                               poly_req_mux;
+  logic [$clog2(NUM_POLYS)-1:0]       poly_id_mux;
+  logic                               poly_rd_en_mux;
+  logic [3:0][$clog2(NCOEFF)-1:0]     poly_rd_idx_mux;
+  logic [3:0]                         poly_rd_lane_valid_mux;
+  logic [3:0]                         poly_wr_en_mux;
+  logic [3:0][$clog2(NCOEFF)-1:0]     poly_wr_idx_mux;
+  logic [3:0][W-1:0]                  poly_wr_data_mux;
 
-  logic                         pau_stall_int;
-  logic                         hsu_stall_int;
+  logic                               poly_ready;
+  logic                               poly_rd_valid;
+  logic [$clog2(NUM_POLYS)-1:0]       poly_rd_poly_id;
+  logic [3:0][$clog2(NCOEFF)-1:0]     poly_rd_idx_rsp;
+  logic [3:0]                         poly_rd_lane_valid_rsp;
+  logic [3:0][W-1:0]                  poly_rd_data_rsp;
 
-  // ==============================================================
-  // Memory subsystem feedback wires
-  // ==============================================================
-  logic [W-1:0] ntt_rdata_wire;
-  logic         ntt_stall_wire;
+  logic                               accepted_read_fire;
+  rd_owner_e                          rd_owner_q, rd_owner_d;
 
-  logic [W-1:0] pu_rdata_wire;
-  logic         pu_stall_wire;
-
-  // ==============================================================
-  // Address mappers
-  // ==============================================================
-  mem_addr_map #(
-    .NUM_BANKS(NUM_BANKS),
-    .NUM_POLYS(NUM_POLYS),
-    .NCOEFF(NCOEFF),
-    .ADDR_W(ADDR_W)
-  ) u_map_pau (
-    .poly_id_i   (pau_poly_id),
-    .coeff_idx_i (pau_coeff_idx),
-    .bank_o      (pau_bank),
-    .addr_o      (pau_addr)
+  // ------------------------------------------------------------
+  // Shared owner selection
+  // ------------------------------------------------------------
+  mem_arbiter u_arbiter (
+    .pau_req_i    (pau_req),
+    .hsu_req_i    (hsu_req),
+    .tr_req_i     (tr_req),
+    .mem_ready_i  (poly_ready),
+    .grant_pau_o  (grant_pau),
+    .grant_hsu_o  (grant_hsu),
+    .grant_tr_o   (grant_tr),
+    .pau_stall_o  (pau_stall),
+    .hsu_stall_o  (hsu_stall),
+    .tr_stall_o   (tr_stall)
   );
 
-  mem_addr_map #(
-    .NUM_BANKS(NUM_BANKS),
-    .NUM_POLYS(NUM_POLYS),
-    .NCOEFF(NCOEFF),
-    .ADDR_W(ADDR_W)
-  ) u_map_hsu (
-    .poly_id_i   (hsu_poly_id),
-    .coeff_idx_i (hsu_coeff_idx),
-    .bank_o      (hsu_bank),
-    .addr_o      (hsu_addr)
-  );
+  // ------------------------------------------------------------
+  // Request mux
+  // ------------------------------------------------------------
+  always_comb begin
+    poly_req_mux           = 1'b0;
+    poly_id_mux            = '0;
+    poly_rd_en_mux         = 1'b0;
+    poly_rd_idx_mux        = '0;
+    poly_rd_lane_valid_mux = '0;
+    poly_wr_en_mux         = '0;
+    poly_wr_idx_mux        = '0;
+    poly_wr_data_mux       = '0;
 
-  mem_addr_map #(
-    .NUM_BANKS(NUM_BANKS),
-    .NUM_POLYS(NUM_POLYS),
-    .NCOEFF(NCOEFF),
-    .ADDR_W(ADDR_W)
-  ) u_map_tr (
-    .poly_id_i   (tr_poly_id),
-    .coeff_idx_i (tr_coeff_idx),
-    .bank_o      (tr_bank),
-    .addr_o      (tr_addr)
-  );
+    if (grant_pau) begin
+      poly_req_mux           = pau_req;
+      poly_id_mux            = pau_poly_id;
+      poly_rd_en_mux         = pau_rd_en;
+      poly_rd_idx_mux        = pau_rd_idx;
+      poly_rd_lane_valid_mux = pau_rd_lane_valid;
+      poly_wr_en_mux         = pau_wr_en;
+      poly_wr_idx_mux        = pau_wr_idx;
+      poly_wr_data_mux       = pau_wr_data;
+    end
+    else if (grant_hsu) begin
+      poly_req_mux           = hsu_req;
+      poly_id_mux            = hsu_poly_id;
+      poly_rd_en_mux         = hsu_rd_en;
+      poly_rd_idx_mux        = hsu_rd_idx;
+      poly_rd_lane_valid_mux = hsu_rd_lane_valid;
+      poly_wr_en_mux         = hsu_wr_en;
+      poly_wr_idx_mux        = hsu_wr_idx;
+      poly_wr_data_mux       = hsu_wr_data;
+    end
+    else if (grant_tr) begin
+      poly_req_mux           = tr_req;
+      poly_id_mux            = tr_poly_id;
+      poly_rd_en_mux         = tr_rd_en;
+      poly_rd_idx_mux        = tr_rd_idx;
+      poly_rd_lane_valid_mux = tr_rd_lane_valid;
+      poly_wr_en_mux         = tr_wr_en;
+      poly_wr_idx_mux        = tr_wr_idx;
+      poly_wr_data_mux       = tr_wr_data;
+    end
+  end
 
-  // ==============================================================
-  // Arbiter
-  // --------------------------------------------------------------
-  // Use arbiter only for the shared NTT-side path.
-  // PAU has higher priority than HSU.
-  // Transcoder is handled separately through PU path.
-  // ==============================================================
-  mem_arbiter #(
-    .NUM_BANKS(NUM_BANKS),
-    .ADDR_W(ADDR_W),
-    .W(W)
-  ) u_arbiter (
-    .pau_req    (pau_req),
-    .pau_bank   (pau_bank),
-    .pau_we     (pau_we),
-    .pau_addr   (pau_addr),
-    .pau_wdata  (pau_wdata),
-    .pau_stall  (pau_stall_int),
+  assign accepted_read_fire = poly_req_mux && poly_rd_en_mux && poly_ready;
 
-    .hsu_req    (hsu_req),
-    .hsu_bank   (hsu_bank),
-    .hsu_we     (hsu_we),
-    .hsu_addr   (hsu_addr),
-    .hsu_wdata  (hsu_wdata),
-    .hsu_stall  (hsu_stall_int),
+  always_comb begin
+    rd_owner_d = rd_owner_q;
 
-    // Transcoder not part of this shared NTT-side arbitration
-    .tr_req     (1'b0),
-    .tr_bank    ('0),
-    .tr_we      (1'b0),
-    .tr_addr    ('0),
-    .tr_wdata   ('0),
-    .tr_stall   (),
+    if (accepted_read_fire) begin
+      if (grant_pau)      rd_owner_d = RD_OWNER_PAU;
+      else if (grant_hsu) rd_owner_d = RD_OWNER_HSU;
+      else if (grant_tr)  rd_owner_d = RD_OWNER_TR;
+      else                rd_owner_d = RD_OWNER_NONE;
+    end
+  end
 
-    .mem_pau_stall_i(mem_pau_stall),
-    .mem_hsu_stall_i(mem_hsu_stall),
-    .mem_tr_stall_i (1'b0),
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rd_owner_q <= RD_OWNER_NONE;
+    end else begin
+      rd_owner_q <= rd_owner_d;
+    end
+  end
 
-    .mem_req    (ntt_req_mux),
-    .mem_bank   (ntt_bank_mux),
-    .mem_we     (ntt_we_mux),
-    .mem_addr   (ntt_addr_mux),
-    .mem_wdata  (ntt_wdata_mux)
-  );
-
-  // ==============================================================
-  // Memory subsystem
-  // ==============================================================
+  // ------------------------------------------------------------
+  // Memory core
+  // ------------------------------------------------------------
   poly_mem_subsystem #(
-    .NUM_BANKS(NUM_BANKS),
-    .N(N),
-    .W(W),
-    .ADDR_W(ADDR_W)
+    .NUM_POLYS  (NUM_POLYS),
+    .NCOEFF     (NCOEFF),
+    .W          (W),
+    .SEED_DEPTH (SEED_DEPTH),
+    .SEED_W     (SEED_W)
   ) u_mem (
-    .clk        (clk),
-    .rst_n      (rst_n),
-
-    .wipe_i     (wipe_i),
-    .wipe_done_o(wipe_done_o),
-
-    // ------------------------------------------------------------
-    // Shared NTT-side path: PAU / HSU via arbiter
-    // ------------------------------------------------------------
-    .ntt_req    (ntt_req_mux),
-    .ntt_bank   (ntt_bank_mux),
-    .ntt_we     (ntt_we_mux),
-    .ntt_addr   (ntt_addr_mux),
-    .ntt_wdata  (ntt_wdata_mux),
-    .ntt_rdata  (ntt_rdata_wire),
-    .ntt_stall  (ntt_stall_wire),
-
-    // ------------------------------------------------------------
-    // PM path unused for now
-    // ------------------------------------------------------------
-    .pm_req      (1'b0),
-    .pm_bank_r0  ('0),
-    .pm_addr_r0  ('0),
-    .pm_rdata_r0 (),
-    .pm_bank_r1  ('0),
-    .pm_addr_r1  ('0),
-    .pm_rdata_r1 (),
-    .pm_bank_w   ('0),
-    .pm_we       (1'b0),
-    .pm_addr_w   ('0),
-    .pm_wdata    ('0),
-    .pm_stall    (),
-
-    // ------------------------------------------------------------
-    // PU path: Transcoder direct
-    // ------------------------------------------------------------
-    .pu_req     (tr_req),
-    .pu_bank    (tr_bank),
-    .pu_we      (tr_we),
-    .pu_addr    (tr_addr),
-    .pu_wdata   (tr_wdata),
-    .pu_rdata   (pu_rdata_wire),
-    .pu_stall   (pu_stall_wire)
+    .clk                (clk),
+    .rst_n              (rst_n),
+    .wipe_i             (wipe_i),
+    .wipe_done_o        (wipe_done_o),
+    .poly_req_i         (poly_req_mux),
+    .poly_id_i          (poly_id_mux),
+    .poly_rd_en_i       (poly_rd_en_mux),
+    .poly_ready_o       (poly_ready),
+    .poly_rd_idx_i      (poly_rd_idx_mux),
+    .poly_rd_lane_valid_i(poly_rd_lane_valid_mux),
+    .poly_rd_valid_o    (poly_rd_valid),
+    .poly_rd_poly_id_o  (poly_rd_poly_id),
+    .poly_rd_idx_o      (poly_rd_idx_rsp),
+    .poly_rd_lane_valid_o(poly_rd_lane_valid_rsp),
+    .poly_rd_data_o     (poly_rd_data_rsp),
+    .poly_wr_en_i       (poly_wr_en_mux),
+    .poly_wr_idx_i      (poly_wr_idx_mux),
+    .poly_wr_data_i     (poly_wr_data_mux),
+    .seed_req_i         (seed_req),
+    .seed_we_i          (seed_we),
+    .seed_addr_i        (seed_addr),
+    .seed_wdata_i       (seed_wdata),
+    .seed_ready_o       (seed_ready),
+    .seed_rvalid_o      (seed_rvalid),
+    .seed_rdata_o       (seed_rdata)
   );
 
-  // ==============================================================
-  // Stall propagation back to arbiter-selected NTT-side clients
-  // ==============================================================
-  assign mem_pau_stall = ntt_stall_wire;
-  assign mem_hsu_stall = ntt_stall_wire;
+  // ------------------------------------------------------------
+  // Response routing
+  // ------------------------------------------------------------
+  always_comb begin
+    pau_rd_valid        = 1'b0;
+    pau_rd_poly_id      = '0;
+    pau_rd_idx_o        = '0;
+    pau_rd_lane_valid_o = '0;
+    pau_rd_data         = '0;
 
-  // ==============================================================
-  // Client outputs
-  // --------------------------------------------------------------
-  // NTT-side clients (PAU/HSU) see the shared NTT read path.
-  // Transcoder sees the PU read path.
-  // ==============================================================
-  assign pau_rdata = ntt_rdata_wire;
-  assign hsu_rdata = ntt_rdata_wire;
-  assign tr_rdata  = pu_rdata_wire;
+    hsu_rd_valid        = 1'b0;
+    hsu_rd_poly_id      = '0;
+    hsu_rd_idx_o        = '0;
+    hsu_rd_lane_valid_o = '0;
+    hsu_rd_data         = '0;
 
-  assign pau_stall = pau_stall_int;
-  assign hsu_stall = hsu_stall_int;
-  assign tr_stall  = pu_stall_wire;
+    tr_rd_valid         = 1'b0;
+    tr_rd_poly_id       = '0;
+    tr_rd_idx_o         = '0;
+    tr_rd_lane_valid_o  = '0;
+    tr_rd_data          = '0;
+
+    if (poly_rd_valid) begin
+      unique case (rd_owner_q)
+        RD_OWNER_PAU: begin
+          pau_rd_valid        = 1'b1;
+          pau_rd_poly_id      = poly_rd_poly_id;
+          pau_rd_idx_o        = poly_rd_idx_rsp;
+          pau_rd_lane_valid_o = poly_rd_lane_valid_rsp;
+          pau_rd_data         = poly_rd_data_rsp;
+        end
+
+        RD_OWNER_HSU: begin
+          hsu_rd_valid        = 1'b1;
+          hsu_rd_poly_id      = poly_rd_poly_id;
+          hsu_rd_idx_o        = poly_rd_idx_rsp;
+          hsu_rd_lane_valid_o = poly_rd_lane_valid_rsp;
+          hsu_rd_data         = poly_rd_data_rsp;
+        end
+
+        RD_OWNER_TR: begin
+          tr_rd_valid         = 1'b1;
+          tr_rd_poly_id       = poly_rd_poly_id;
+          tr_rd_idx_o         = poly_rd_idx_rsp;
+          tr_rd_lane_valid_o  = poly_rd_lane_valid_rsp;
+          tr_rd_data          = poly_rd_data_rsp;
+        end
+
+        default: begin
+        end
+      endcase
+    end
+  end
 
 endmodule

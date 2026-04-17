@@ -1,357 +1,321 @@
 /*
  * Module Name: poly_mem_subsystem
- * Author(s): Mavra Muzmmal
+ * Author(s): OpenAI Codex
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
  * Description:
- *   Memory subsystem for polynomial storage.
+ *   Vectorized polynomial-memory subsystem for the QREM core.
  *
- *   Features:
- *     - 4 banked dual-port RAMs
- *     - Port A shared by NTT / PolyMul write / Pack-Unpack
- *     - Port B used by PolyMul reads
- *     - Synchronous read steering fix using delayed accepted bank tags
- *     - Security wipe FSM that zeroes all banks
+ * Architectural role:
+ *   - Owns the banked polynomial memory and the lightweight seed store.
+ *   - Exposes a single 4-lane polynomial-memory request port.
+ *   - Performs security wipe of both polynomial memory and seed memory.
  *
- *   Notes:
- *     - N = rows per bank
- *     - For 32 polynomial slots:
- *         256 coeff/poly / 4 banks = 64 rows/poly/bank
- *         32 polys * 64 rows = 2048 rows per bank
+ * Why this file changed:
+ *   The older subsystem modeled separate scalar "NTT / PM / PU" paths with
+ *   Port-A / Port-B ownership rules baked into the interface. That no longer
+ *   matches the v0.7 architecture, where:
+ *     - PAU drives a vector CMI-style request stream
+ *     - HSU reaches memory through a poly-memory writer bridge
+ *     - Transcoder is another shared client
+ *     - arbitration is strict and centralized before the memory core
+ *
+ * New contract:
+ *   One accepted vector transaction per cycle enters the polynomial memory
+ *   wrapper. The wrapper itself still checks lane-level bank conflicts and
+ *   returns a 1-cycle read response with aligned metadata.
  */
 
 module poly_mem_subsystem #(
-  parameter int NUM_BANKS = 4,
-  parameter int N         = 2048,
-  parameter int W         = 16,
-  parameter int ADDR_W    = $clog2(N)
+  parameter int NUM_POLYS  = 32,
+  parameter int NCOEFF     = 256,
+  parameter int W          = 16,
+  parameter int SEED_DEPTH = 16,
+  parameter int SEED_W     = 64
 )(
   input  logic clk,
   input  logic rst_n,
 
-  // -----------------------------
+  // ------------------------------------------------------------
   // Security wipe
-  // -----------------------------
+  // ------------------------------------------------------------
   input  logic wipe_i,
   output logic wipe_done_o,
 
-  // ==============================================================
-  // NTT interface
-  // ==============================================================
-  input  logic                         ntt_req,
-  input  logic [$clog2(NUM_BANKS)-1:0] ntt_bank,
-  input  logic                         ntt_we,
-  input  logic [ADDR_W-1:0]            ntt_addr,
-  input  logic [W-1:0]                 ntt_wdata,
-  output logic [W-1:0]                 ntt_rdata,
-  output logic                         ntt_stall,
+  // ------------------------------------------------------------
+  // Shared polynomial-memory request plane
+  // ------------------------------------------------------------
+  input  logic                               poly_req_i,
+  input  logic [$clog2(NUM_POLYS)-1:0]       poly_id_i,
+  input  logic                               poly_rd_en_i,
+  output logic                               poly_ready_o,
 
-  // ==============================================================
-  // PolyMul interface
-  // ==============================================================
-  input  logic                         pm_req,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     poly_rd_idx_i,
+  input  logic [3:0]                         poly_rd_lane_valid_i,
 
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r0,
-  input  logic [ADDR_W-1:0]            pm_addr_r0,
-  output logic [W-1:0]                 pm_rdata_r0,
+  output logic                               poly_rd_valid_o,
+  output logic [$clog2(NUM_POLYS)-1:0]       poly_rd_poly_id_o,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     poly_rd_idx_o,
+  output logic [3:0]                         poly_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  poly_rd_data_o,
 
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r1,
-  input  logic [ADDR_W-1:0]            pm_addr_r1,
-  output logic [W-1:0]                 pm_rdata_r1,
+  input  logic [3:0]                         poly_wr_en_i,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     poly_wr_idx_i,
+  input  logic [3:0][W-1:0]                  poly_wr_data_i,
 
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_w,
-  input  logic                         pm_we,
-  input  logic [ADDR_W-1:0]            pm_addr_w,
-  input  logic [W-1:0]                 pm_wdata,
-  output logic                         pm_stall,
-
-  // ==============================================================
-  // Pack/Unpack interface
-  // ==============================================================
-  input  logic                         pu_req,
-  input  logic [$clog2(NUM_BANKS)-1:0] pu_bank,
-  input  logic                         pu_we,
-  input  logic [ADDR_W-1:0]            pu_addr,
-  input  logic [W-1:0]                 pu_wdata,
-  output logic [W-1:0]                 pu_rdata,
-  output logic                         pu_stall
+  // ------------------------------------------------------------
+  // Seed / protocol store
+  // ------------------------------------------------------------
+  input  logic                               seed_req_i,
+  input  logic                               seed_we_i,
+  input  logic [$clog2(SEED_DEPTH)-1:0]      seed_addr_i,
+  input  logic [SEED_W-1:0]                  seed_wdata_i,
+  output logic                               seed_ready_o,
+  output logic                               seed_rvalid_o,
+  output logic [SEED_W-1:0]                  seed_rdata_o
 );
 
-  // ==============================================================
-  // Internal bank interface signals
-  // ==============================================================
-  logic [NUM_BANKS-1:0]             bank_a_we, bank_b_we;
-  logic [NUM_BANKS-1:0][ADDR_W-1:0] bank_a_addr, bank_b_addr;
-  logic [NUM_BANKS-1:0][W-1:0]      bank_a_wdata, bank_b_wdata;
-  logic [NUM_BANKS-1:0][W-1:0]      bank_a_rdata, bank_b_rdata;
+  localparam int NUM_BANKS           = 4;
+  localparam int COEFF_W             = $clog2(NCOEFF);
+  localparam int ROWS_PER_POLY_BANK  = NCOEFF / NUM_BANKS;
+  localparam int ROW_W               = $clog2(ROWS_PER_POLY_BANK);
+  localparam int SEED_AW             = $clog2(SEED_DEPTH);
 
-  // ==============================================================
-  // RAM bank instances
-  // ==============================================================
-  genvar i;
-  generate
-    for (i = 0; i < NUM_BANKS; i++) begin : G_BANKS
-      poly_ram_bank #(
-        .N(N),
-        .W(W),
-        .ADDR_W(ADDR_W)
-      ) u_bank (
-        .clk    (clk),
-        .rst_n  (rst_n),
-
-        .a_we   (bank_a_we[i]),
-        .a_addr (bank_a_addr[i]),
-        .a_wdata(bank_a_wdata[i]),
-        .a_rdata(bank_a_rdata[i]),
-
-        .b_we   (bank_b_we[i]),
-        .b_addr (bank_b_addr[i]),
-        .b_wdata(bank_b_wdata[i]),
-        .b_rdata(bank_b_rdata[i])
-      );
-    end
-  endgenerate
-
-  // ==============================================================
-  // Wipe FSM
-  // ==============================================================
   typedef enum logic [1:0] {
-    WIPE_IDLE,
-    WIPE_ACTIVE,
-    WIPE_DONE
+    WIPE_IDLE  = 2'd0,
+    WIPE_POLY  = 2'd1,
+    WIPE_SEED  = 2'd2,
+    WIPE_DONE  = 2'd3
   } wipe_state_e;
 
-  wipe_state_e         wipe_state_q, wipe_state_d;
-  logic [ADDR_W-1:0]   wipe_addr_q, wipe_addr_d;
+  wipe_state_e wipe_state_q, wipe_state_d;
+  logic [$clog2(NUM_POLYS)-1:0] wipe_poly_q, wipe_poly_d;
+  logic [ROW_W-1:0]             wipe_row_q,  wipe_row_d;
+  logic [SEED_AW-1:0]           wipe_seed_q, wipe_seed_d;
 
-  // ==============================================================
-  // Accepted request signals for sync-read steering
-  // ==============================================================
-  logic ntt_accept;
-  logic pm_r0_accept;
-  logic pm_r1_accept;
-  logic pu_accept;
+  logic                               poly_req_mux;
+  logic [$clog2(NUM_POLYS)-1:0]       poly_id_mux;
+  logic                               poly_rd_en_mux;
+  logic                               poly_ready_int;
+  logic [3:0][COEFF_W-1:0]            poly_rd_idx_mux;
+  logic [3:0]                         poly_rd_lane_valid_mux;
+  logic [3:0]                         poly_wr_en_mux;
+  logic [3:0][COEFF_W-1:0]            poly_wr_idx_mux;
+  logic [3:0][W-1:0]                  poly_wr_data_mux;
 
-  // Delayed bank tags
-  logic [$clog2(NUM_BANKS)-1:0] ntt_bank_q;
-  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r0_q;
-  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r1_q;
-  logic [$clog2(NUM_BANKS)-1:0] pu_bank_q;
+  logic                               seed_we_mux;
+  logic [SEED_AW-1:0]                 seed_addr_mux;
+  logic [SEED_W-1:0]                  seed_wdata_mux;
+  logic [SEED_W-1:0]                  seed_rdata_int;
+  logic                               seed_read_fire;
+  logic                               seed_read_fire_q;
 
-  // Delayed read-valid tags
-  logic ntt_rd_valid_q;
-  logic pm_r0_valid_q;
-  logic pm_r1_valid_q;
-  logic pu_rd_valid_q;
+  logic [COEFF_W-1:0] wipe_base_idx;
 
-  // ==============================================================
-  // Arbitration / request routing
-  // Wipe is master override
-  // ==============================================================
-  integer k;
+  assign wipe_base_idx = COEFF_W'({wipe_row_q, 2'b00});
+
+  // ------------------------------------------------------------
+  // Request muxing
+  // ------------------------------------------------------------
   always_comb begin
-    // Defaults
-    bank_a_we    = '0;
-    bank_b_we    = '0;
-    bank_a_addr  = '0;
-    bank_b_addr  = '0;
-    bank_a_wdata = '0;
-    bank_b_wdata = '0;
+    poly_req_mux           = poly_req_i;
+    poly_id_mux            = poly_id_i;
+    poly_rd_en_mux         = poly_rd_en_i;
+    poly_rd_idx_mux        = poly_rd_idx_i;
+    poly_rd_lane_valid_mux = poly_rd_lane_valid_i;
+    poly_wr_en_mux         = poly_wr_en_i;
+    poly_wr_idx_mux        = poly_wr_idx_i;
+    poly_wr_data_mux       = poly_wr_data_i;
 
-    ntt_stall    = 1'b0;
-    pm_stall     = 1'b0;
-    pu_stall     = 1'b0;
-    wipe_done_o  = 1'b0;
+    seed_we_mux            = seed_we_i;
+    seed_addr_mux          = seed_addr_i;
+    seed_wdata_mux         = seed_wdata_i;
 
-    // Default accepts
-    ntt_accept   = 1'b0;
-    pm_r0_accept = 1'b0;
-    pm_r1_accept = 1'b0;
-    pu_accept    = 1'b0;
-
-    // ----------------------------
-    // Wipe override
-    // ----------------------------
-    if (wipe_state_q == WIPE_ACTIVE) begin
-      for (k = 0; k < NUM_BANKS; k++) begin
-        bank_a_we[k]    = 1'b1;
-        bank_a_addr[k]  = wipe_addr_q;
-        bank_a_wdata[k] = '0;
-      end
-
-      ntt_stall = 1'b1;
-      pm_stall  = 1'b1;
-      pu_stall  = 1'b1;
-    end
-    else begin
-      // ----------------------------------------------------------
-      // PORT A: NTT (highest priority)
-      // ----------------------------------------------------------
-      if (ntt_req) begin
-        bank_a_addr[ntt_bank]  = ntt_addr;
-        bank_a_we[ntt_bank]    = ntt_we;
-        bank_a_wdata[ntt_bank] = ntt_wdata;
-
-        if (!ntt_we)
-          ntt_accept = 1'b1;
-      end
-
-      // ----------------------------------------------------------
-      // PORT A: PolyMul write
-      // ----------------------------------------------------------
-      if (pm_req) begin
-        if (!(ntt_req && (ntt_bank == pm_bank_w))) begin
-          bank_a_addr[pm_bank_w]  = pm_addr_w;
-          bank_a_we[pm_bank_w]    = pm_we;
-          bank_a_wdata[pm_bank_w] = pm_wdata;
-        end
-        else begin
-          pm_stall = 1'b1;
-        end
-      end
-
-      // ----------------------------------------------------------
-      // PORT A: Pack/Unpack (lowest priority)
-      // ----------------------------------------------------------
-      if (pu_req) begin
-        if (!(ntt_req && (ntt_bank == pu_bank)) &&
-            !(pm_req  && (pm_bank_w == pu_bank))) begin
-          bank_a_addr[pu_bank]  = pu_addr;
-          bank_a_we[pu_bank]    = pu_we;
-          bank_a_wdata[pu_bank] = pu_wdata;
-
-          if (!pu_we)
-            pu_accept = 1'b1;
-        end
-        else begin
-          pu_stall = 1'b1;
-        end
-      end
-
-      // ----------------------------------------------------------
-      // PORT B: PolyMul reads
-      // ----------------------------------------------------------
-      if (pm_req) begin
-        // r0 always issues
-        bank_b_addr[pm_bank_r0] = pm_addr_r0;
-        pm_r0_accept = 1'b1;
-
-        // r1 only if different bank
-        if (pm_bank_r1 != pm_bank_r0) begin
-          bank_b_addr[pm_bank_r1] = pm_addr_r1;
-          pm_r1_accept = 1'b1;
-        end
-        else begin
-          pm_stall = 1'b1;
-        end
-      end
-    end
-
-    if (wipe_state_q == WIPE_DONE)
-      wipe_done_o = 1'b1;
-  end
-
-  // ==============================================================
-  // Wipe next-state logic
-  // ==============================================================
-  always_comb begin
-    wipe_state_d = wipe_state_q;
-    wipe_addr_d  = wipe_addr_q;
+    poly_ready_o           = poly_ready_int;
+    seed_ready_o           = 1'b1;
+    wipe_done_o            = 1'b0;
 
     case (wipe_state_q)
       WIPE_IDLE: begin
+        // Pass-through mode: clients own the memory plane.
+      end
+
+      WIPE_POLY: begin
+        // Wipe writes one full row (4 coeffs) of one polynomial per cycle.
+        poly_req_mux           = 1'b1;
+        poly_id_mux            = wipe_poly_q;
+        poly_rd_en_mux         = 1'b0;
+        poly_rd_idx_mux[0]     = wipe_base_idx + COEFF_W'(0);
+        poly_rd_idx_mux[1]     = wipe_base_idx + COEFF_W'(1);
+        poly_rd_idx_mux[2]     = wipe_base_idx + COEFF_W'(2);
+        poly_rd_idx_mux[3]     = wipe_base_idx + COEFF_W'(3);
+        poly_rd_lane_valid_mux = 4'b0000;
+        poly_wr_en_mux         = 4'b1111;
+        poly_wr_idx_mux        = poly_rd_idx_mux;
+        poly_wr_data_mux       = '0;
+
+        seed_ready_o           = 1'b0;
+        poly_ready_o           = 1'b0;
+      end
+
+      WIPE_SEED: begin
+        poly_req_mux           = 1'b0;
+        poly_rd_en_mux         = 1'b0;
+        poly_rd_idx_mux        = '0;
+        poly_rd_lane_valid_mux = '0;
+        poly_wr_en_mux         = '0;
+        poly_wr_idx_mux        = '0;
+        poly_wr_data_mux       = '0;
+
+        seed_we_mux            = 1'b1;
+        seed_addr_mux          = wipe_seed_q;
+        seed_wdata_mux         = '0;
+
+        seed_ready_o           = 1'b0;
+        poly_ready_o           = 1'b0;
+      end
+
+      WIPE_DONE: begin
+        poly_req_mux           = 1'b0;
+        poly_rd_en_mux         = 1'b0;
+        poly_rd_idx_mux        = '0;
+        poly_rd_lane_valid_mux = '0;
+        poly_wr_en_mux         = '0;
+        poly_wr_idx_mux        = '0;
+        poly_wr_data_mux       = '0;
+
+        seed_we_mux            = 1'b0;
+        seed_addr_mux          = '0;
+        seed_wdata_mux         = '0;
+
+        seed_ready_o           = 1'b0;
+        poly_ready_o           = 1'b0;
+        wipe_done_o            = 1'b1;
+      end
+
+      default: begin
+      end
+    endcase
+  end
+
+  // ------------------------------------------------------------
+  // Polynomial memory wrapper
+  // ------------------------------------------------------------
+  poly_mem_wrapper_4bank #(
+    .N         (NCOEFF),
+    .W         (W),
+    .NUM_POLYS (NUM_POLYS)
+  ) u_poly_mem_wrapper (
+    .clk             (clk),
+    .rst_n           (rst_n),
+    .poly_id_i       (poly_id_mux),
+    .v_i             (poly_req_mux),
+    .rd_en_i         (poly_rd_en_mux),
+    .ready_o         (poly_ready_int),
+    .rd_idx_i        (poly_rd_idx_mux),
+    .rd_lane_valid_i (poly_rd_lane_valid_mux),
+    .rd_valid_o      (poly_rd_valid_o),
+    .rd_poly_id_o    (poly_rd_poly_id_o),
+    .rd_idx_o        (poly_rd_idx_o),
+    .rd_lane_valid_o (poly_rd_lane_valid_o),
+    .rd_data_o       (poly_rd_data_o),
+    .wr_en_i         (poly_wr_en_mux),
+    .wr_idx_i        (poly_wr_idx_mux),
+    .wr_data_i       (poly_wr_data_mux)
+  );
+
+  // ------------------------------------------------------------
+  // Seed / protocol store
+  // ------------------------------------------------------------
+  // The seed store is lightweight and independent of the polynomial-memory
+  // banking. For now it exposes one direct request port; multi-client seed
+  // arbitration can sit above this module in a dedicated bridge if needed.
+  assign seed_read_fire = (wipe_state_q == WIPE_IDLE) && seed_req_i && !seed_we_i;
+
+  seed_ram #(
+    .DEPTH  (SEED_DEPTH),
+    .W      (SEED_W),
+    .ADDR_W (SEED_AW)
+  ) u_seed_ram (
+    .clk   (clk),
+    .rst_n (rst_n),
+    .we    (seed_we_mux),
+    .addr  (seed_addr_mux),
+    .wdata (seed_wdata_mux),
+    .rdata (seed_rdata_int)
+  );
+
+  assign seed_rdata_o = seed_rdata_int;
+  assign seed_rvalid_o = seed_read_fire_q;
+
+  // ------------------------------------------------------------
+  // Wipe FSM
+  // ------------------------------------------------------------
+  always_comb begin
+    wipe_state_d = wipe_state_q;
+    wipe_poly_d  = wipe_poly_q;
+    wipe_row_d   = wipe_row_q;
+    wipe_seed_d  = wipe_seed_q;
+
+    unique case (wipe_state_q)
+      WIPE_IDLE: begin
         if (wipe_i) begin
-          wipe_state_d = WIPE_ACTIVE;
-          wipe_addr_d  = '0;
+          wipe_state_d = WIPE_POLY;
+          wipe_poly_d  = '0;
+          wipe_row_d   = '0;
+          wipe_seed_d  = '0;
         end
       end
 
-      WIPE_ACTIVE: begin
-        if (wipe_addr_q == N-1) begin
-          wipe_state_d = WIPE_DONE;
-          wipe_addr_d  = wipe_addr_q;
+      WIPE_POLY: begin
+        if (poly_ready_int) begin
+          if ((wipe_poly_q == NUM_POLYS-1) && (wipe_row_q == ROWS_PER_POLY_BANK-1)) begin
+            wipe_state_d = WIPE_SEED;
+            wipe_seed_d  = '0;
+          end else if (wipe_row_q == ROWS_PER_POLY_BANK-1) begin
+            wipe_poly_d = wipe_poly_q + 1'b1;
+            wipe_row_d  = '0;
+          end else begin
+            wipe_row_d = wipe_row_q + 1'b1;
+          end
         end
-        else begin
-          wipe_state_d = WIPE_ACTIVE;
-          wipe_addr_d  = wipe_addr_q + 1'b1;
+      end
+
+      WIPE_SEED: begin
+        if (wipe_seed_q == SEED_DEPTH-1) begin
+          wipe_state_d = WIPE_DONE;
+        end else begin
+          wipe_seed_d = wipe_seed_q + 1'b1;
         end
       end
 
       WIPE_DONE: begin
         wipe_state_d = WIPE_IDLE;
-        wipe_addr_d  = '0;
       end
 
       default: begin
         wipe_state_d = WIPE_IDLE;
-        wipe_addr_d  = '0;
+        wipe_poly_d  = '0;
+        wipe_row_d   = '0;
+        wipe_seed_d  = '0;
       end
     endcase
   end
 
-  // ==============================================================
-  // Sequential state / delayed read steering
-  // ==============================================================
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      wipe_state_q <= WIPE_IDLE;
-      wipe_addr_q  <= '0;
-
-      ntt_bank_q   <= '0;
-      pm_bank_r0_q <= '0;
-      pm_bank_r1_q <= '0;
-      pu_bank_q    <= '0;
-
-      ntt_rd_valid_q <= 1'b0;
-      pm_r0_valid_q  <= 1'b0;
-      pm_r1_valid_q  <= 1'b0;
-      pu_rd_valid_q  <= 1'b0;
+      wipe_state_q    <= WIPE_IDLE;
+      wipe_poly_q     <= '0;
+      wipe_row_q      <= '0;
+      wipe_seed_q     <= '0;
+      seed_read_fire_q <= 1'b0;
+    end else begin
+      wipe_state_q    <= wipe_state_d;
+      wipe_poly_q     <= wipe_poly_d;
+      wipe_row_q      <= wipe_row_d;
+      wipe_seed_q     <= wipe_seed_d;
+      seed_read_fire_q <= seed_read_fire;
     end
-    else begin
-      wipe_state_q <= wipe_state_d;
-      wipe_addr_q  <= wipe_addr_d;
-
-      // Latch only accepted read requests
-      if (ntt_accept)
-        ntt_bank_q <= ntt_bank;
-
-      if (pm_r0_accept)
-        pm_bank_r0_q <= pm_bank_r0;
-
-      if (pm_r1_accept)
-        pm_bank_r1_q <= pm_bank_r1;
-
-      if (pu_accept)
-        pu_bank_q <= pu_bank;
-
-      // Valid tags update every cycle
-      ntt_rd_valid_q <= ntt_accept;
-      pm_r0_valid_q  <= pm_r0_accept;
-      pm_r1_valid_q  <= pm_r1_accept;
-      pu_rd_valid_q  <= pu_accept;
-    end
-  end
-
-  // ==============================================================
-  // Returned data steering
-  // Use delayed bank tags because RAM reads are synchronous
-  // ==============================================================
-  always_comb begin
-    ntt_rdata   = '0;
-    pm_rdata_r0 = '0;
-    pm_rdata_r1 = '0;
-    pu_rdata    = '0;
-
-    if (ntt_rd_valid_q)
-      ntt_rdata = bank_a_rdata[ntt_bank_q];
-
-    if (pm_r0_valid_q)
-      pm_rdata_r0 = bank_b_rdata[pm_bank_r0_q];
-
-    if (pm_r1_valid_q)
-      pm_rdata_r1 = bank_b_rdata[pm_bank_r1_q];
-
-    if (pu_rd_valid_q)
-      pu_rdata = bank_a_rdata[pu_bank_q];
   end
 
 endmodule

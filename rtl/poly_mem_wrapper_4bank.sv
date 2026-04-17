@@ -241,8 +241,8 @@ module poly_mem_wrapper_4bank #(
   logic [3:0]                   rd_lane_valid_r;
   logic [3:0][1:0]              rd_bank_r;
 
-  always_ff @(posedge clk or posedge rst_n) begin
-    if (rst_n) begin
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
       rd_valid_r      <= 1'b0;
       rd_poly_id_r    <= '0;
       rd_idx_r        <= '0;
