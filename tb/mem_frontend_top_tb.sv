@@ -1,12 +1,14 @@
 `timescale 1ns/1ps
 
 module mem_frontend_top_tb;
-// DUT is now poly_mem_subsystem (mem_frontend_top was merged into it).
+  // Integration TB for the v0.75 memory subsystem.
+  // The old mem_frontend_top block was merged into poly_mem_subsystem, but
+  // this filename is kept so existing build flows still have a stable target.
 
   localparam int NUM_POLYS  = 32;
   localparam int NCOEFF     = 256;
   localparam int W          = 16;
-  localparam int SEED_DEPTH = 16;
+  localparam int SEED_DEPTH = 32;
   localparam int SEED_W     = 64;
   localparam int POLY_W     = $clog2(NUM_POLYS);
   localparam int COEFF_W    = $clog2(NCOEFF);
@@ -14,66 +16,72 @@ module mem_frontend_top_tb;
 
   logic clk;
   logic rst;
-
   logic wipe_i;
   logic wipe_done_o;
 
-  // PAU
   logic                           pau_req;
-  logic [POLY_W-1:0]              pau_poly_id;
   logic                           pau_rd_en;
+  logic [POLY_W-1:0]              pau_rd_poly_id;
   logic [3:0][COEFF_W-1:0]        pau_rd_idx;
   logic [3:0]                     pau_rd_lane_valid;
   logic [3:0]                     pau_wr_en;
+  logic [POLY_W-1:0]              pau_wr_poly_id;
   logic [3:0][COEFF_W-1:0]        pau_wr_idx;
   logic [3:0][W-1:0]              pau_wr_data;
   logic                           pau_rd_valid;
-  logic [POLY_W-1:0]              pau_rd_poly_id;
+  logic [POLY_W-1:0]              pau_rd_poly_id_o;
   logic [3:0][COEFF_W-1:0]        pau_rd_idx_o;
   logic [3:0]                     pau_rd_lane_valid_o;
   logic [3:0][W-1:0]              pau_rd_data;
   logic                           pau_stall;
 
-  // HSU
   logic                           hsu_req;
-  logic [POLY_W-1:0]              hsu_poly_id;
   logic                           hsu_rd_en;
+  logic [POLY_W-1:0]              hsu_rd_poly_id;
   logic [3:0][COEFF_W-1:0]        hsu_rd_idx;
   logic [3:0]                     hsu_rd_lane_valid;
   logic [3:0]                     hsu_wr_en;
+  logic [POLY_W-1:0]              hsu_wr_poly_id;
   logic [3:0][COEFF_W-1:0]        hsu_wr_idx;
   logic [3:0][W-1:0]              hsu_wr_data;
   logic                           hsu_rd_valid;
-  logic [POLY_W-1:0]              hsu_rd_poly_id;
+  logic [POLY_W-1:0]              hsu_rd_poly_id_o;
   logic [3:0][COEFF_W-1:0]        hsu_rd_idx_o;
   logic [3:0]                     hsu_rd_lane_valid_o;
   logic [3:0][W-1:0]              hsu_rd_data;
   logic                           hsu_stall;
 
-  // Transcoder
   logic                           tr_req;
-  logic [POLY_W-1:0]              tr_poly_id;
   logic                           tr_rd_en;
+  logic [POLY_W-1:0]              tr_rd_poly_id;
   logic [3:0][COEFF_W-1:0]        tr_rd_idx;
   logic [3:0]                     tr_rd_lane_valid;
   logic [3:0]                     tr_wr_en;
+  logic [POLY_W-1:0]              tr_wr_poly_id;
   logic [3:0][COEFF_W-1:0]        tr_wr_idx;
   logic [3:0][W-1:0]              tr_wr_data;
   logic                           tr_rd_valid;
-  logic [POLY_W-1:0]              tr_rd_poly_id;
+  logic [POLY_W-1:0]              tr_rd_poly_id_o;
   logic [3:0][COEFF_W-1:0]        tr_rd_idx_o;
   logic [3:0]                     tr_rd_lane_valid_o;
   logic [3:0][W-1:0]              tr_rd_data;
   logic                           tr_stall;
 
-  // Seed
-  logic                           seed_req;
-  logic                           seed_we;
-  logic [SEED_AW-1:0]             seed_addr;
-  logic [SEED_W-1:0]              seed_wdata;
-  logic                           seed_ready;
-  logic                           seed_rvalid;
-  logic [SEED_W-1:0]              seed_rdata;
+  logic                           hsu_seed_req;
+  logic                           hsu_seed_we;
+  logic [SEED_AW-1:0]             hsu_seed_addr;
+  logic [SEED_W-1:0]              hsu_seed_wdata;
+  logic                           hsu_seed_ready;
+  logic                           hsu_seed_rvalid;
+  logic [SEED_W-1:0]              hsu_seed_rdata;
+
+  logic                           tr_seed_req;
+  logic                           tr_seed_we;
+  logic [SEED_AW-1:0]             tr_seed_addr;
+  logic [SEED_W-1:0]              tr_seed_wdata;
+  logic                           tr_seed_ready;
+  logic                           tr_seed_rvalid;
+  logic [SEED_W-1:0]              tr_seed_rdata;
 
   poly_mem_subsystem #(
     .NUM_POLYS  (NUM_POLYS),
@@ -82,59 +90,69 @@ module mem_frontend_top_tb;
     .SEED_DEPTH (SEED_DEPTH),
     .SEED_W     (SEED_W)
   ) dut (
-    .clk                (clk),
-    .rst                (rst),
-    .wipe_i             (wipe_i),
-    .wipe_done_o        (wipe_done_o),
-    .pau_req            (pau_req),
-    .pau_poly_id        (pau_poly_id),
-    .pau_rd_en          (pau_rd_en),
-    .pau_rd_idx         (pau_rd_idx),
-    .pau_rd_lane_valid  (pau_rd_lane_valid),
-    .pau_wr_en          (pau_wr_en),
-    .pau_wr_idx         (pau_wr_idx),
-    .pau_wr_data        (pau_wr_data),
-    .pau_rd_valid       (pau_rd_valid),
-    .pau_rd_poly_id     (pau_rd_poly_id),
-    .pau_rd_idx_o       (pau_rd_idx_o),
+    .clk(clk),
+    .rst(rst),
+    .wipe_i(wipe_i),
+    .wipe_done_o(wipe_done_o),
+    .pau_req(pau_req),
+    .pau_rd_en(pau_rd_en),
+    .pau_rd_poly_id(pau_rd_poly_id),
+    .pau_rd_idx(pau_rd_idx),
+    .pau_rd_lane_valid(pau_rd_lane_valid),
+    .pau_wr_en(pau_wr_en),
+    .pau_wr_poly_id(pau_wr_poly_id),
+    .pau_wr_idx(pau_wr_idx),
+    .pau_wr_data(pau_wr_data),
+    .pau_rd_valid(pau_rd_valid),
+    .pau_rd_poly_id_o(pau_rd_poly_id_o),
+    .pau_rd_idx_o(pau_rd_idx_o),
     .pau_rd_lane_valid_o(pau_rd_lane_valid_o),
-    .pau_rd_data        (pau_rd_data),
-    .pau_stall          (pau_stall),
-    .hsu_req            (hsu_req),
-    .hsu_poly_id        (hsu_poly_id),
-    .hsu_rd_en          (hsu_rd_en),
-    .hsu_rd_idx         (hsu_rd_idx),
-    .hsu_rd_lane_valid  (hsu_rd_lane_valid),
-    .hsu_wr_en          (hsu_wr_en),
-    .hsu_wr_idx         (hsu_wr_idx),
-    .hsu_wr_data        (hsu_wr_data),
-    .hsu_rd_valid       (hsu_rd_valid),
-    .hsu_rd_poly_id     (hsu_rd_poly_id),
-    .hsu_rd_idx_o       (hsu_rd_idx_o),
+    .pau_rd_data(pau_rd_data),
+    .pau_stall(pau_stall),
+    .hsu_req(hsu_req),
+    .hsu_rd_en(hsu_rd_en),
+    .hsu_rd_poly_id(hsu_rd_poly_id),
+    .hsu_rd_idx(hsu_rd_idx),
+    .hsu_rd_lane_valid(hsu_rd_lane_valid),
+    .hsu_wr_en(hsu_wr_en),
+    .hsu_wr_poly_id(hsu_wr_poly_id),
+    .hsu_wr_idx(hsu_wr_idx),
+    .hsu_wr_data(hsu_wr_data),
+    .hsu_rd_valid(hsu_rd_valid),
+    .hsu_rd_poly_id_o(hsu_rd_poly_id_o),
+    .hsu_rd_idx_o(hsu_rd_idx_o),
     .hsu_rd_lane_valid_o(hsu_rd_lane_valid_o),
-    .hsu_rd_data        (hsu_rd_data),
-    .hsu_stall          (hsu_stall),
-    .tr_req             (tr_req),
-    .tr_poly_id         (tr_poly_id),
-    .tr_rd_en           (tr_rd_en),
-    .tr_rd_idx          (tr_rd_idx),
-    .tr_rd_lane_valid   (tr_rd_lane_valid),
-    .tr_wr_en           (tr_wr_en),
-    .tr_wr_idx          (tr_wr_idx),
-    .tr_wr_data         (tr_wr_data),
-    .tr_rd_valid        (tr_rd_valid),
-    .tr_rd_poly_id      (tr_rd_poly_id),
-    .tr_rd_idx_o        (tr_rd_idx_o),
-    .tr_rd_lane_valid_o (tr_rd_lane_valid_o),
-    .tr_rd_data         (tr_rd_data),
-    .tr_stall           (tr_stall),
-    .seed_req           (seed_req),
-    .seed_we            (seed_we),
-    .seed_addr          (seed_addr),
-    .seed_wdata         (seed_wdata),
-    .seed_ready         (seed_ready),
-    .seed_rvalid        (seed_rvalid),
-    .seed_rdata         (seed_rdata)
+    .hsu_rd_data(hsu_rd_data),
+    .hsu_stall(hsu_stall),
+    .tr_req(tr_req),
+    .tr_rd_en(tr_rd_en),
+    .tr_rd_poly_id(tr_rd_poly_id),
+    .tr_rd_idx(tr_rd_idx),
+    .tr_rd_lane_valid(tr_rd_lane_valid),
+    .tr_wr_en(tr_wr_en),
+    .tr_wr_poly_id(tr_wr_poly_id),
+    .tr_wr_idx(tr_wr_idx),
+    .tr_wr_data(tr_wr_data),
+    .tr_rd_valid(tr_rd_valid),
+    .tr_rd_poly_id_o(tr_rd_poly_id_o),
+    .tr_rd_idx_o(tr_rd_idx_o),
+    .tr_rd_lane_valid_o(tr_rd_lane_valid_o),
+    .tr_rd_data(tr_rd_data),
+    .tr_stall(tr_stall),
+    .hsu_seed_req(hsu_seed_req),
+    .hsu_seed_we(hsu_seed_we),
+    .hsu_seed_addr(hsu_seed_addr),
+    .hsu_seed_wdata(hsu_seed_wdata),
+    .hsu_seed_ready(hsu_seed_ready),
+    .hsu_seed_rvalid(hsu_seed_rvalid),
+    .hsu_seed_rdata(hsu_seed_rdata),
+    .tr_seed_req(tr_seed_req),
+    .tr_seed_we(tr_seed_we),
+    .tr_seed_addr(tr_seed_addr),
+    .tr_seed_wdata(tr_seed_wdata),
+    .tr_seed_ready(tr_seed_ready),
+    .tr_seed_rvalid(tr_seed_rvalid),
+    .tr_seed_rdata(tr_seed_rdata)
   );
 
   initial clk = 1'b0;
@@ -147,286 +165,326 @@ module mem_frontend_top_tb;
     end
   endtask
 
+  task automatic clear_poly_clients;
+    begin
+      pau_req           = 1'b0;
+      pau_rd_en         = 1'b0;
+      pau_rd_poly_id    = '0;
+      pau_rd_idx        = '0;
+      pau_rd_lane_valid = '0;
+      pau_wr_en         = '0;
+      pau_wr_poly_id    = '0;
+      pau_wr_idx        = '0;
+      pau_wr_data       = '0;
+
+      hsu_req           = 1'b0;
+      hsu_rd_en         = 1'b0;
+      hsu_rd_poly_id    = '0;
+      hsu_rd_idx        = '0;
+      hsu_rd_lane_valid = '0;
+      hsu_wr_en         = '0;
+      hsu_wr_poly_id    = '0;
+      hsu_wr_idx        = '0;
+      hsu_wr_data       = '0;
+
+      tr_req            = 1'b0;
+      tr_rd_en          = 1'b0;
+      tr_rd_poly_id     = '0;
+      tr_rd_idx         = '0;
+      tr_rd_lane_valid  = '0;
+      tr_wr_en          = '0;
+      tr_wr_poly_id     = '0;
+      tr_wr_idx         = '0;
+      tr_wr_data        = '0;
+    end
+  endtask
+
+  task automatic clear_seed_clients;
+    begin
+      hsu_seed_req   = 1'b0;
+      hsu_seed_we    = 1'b0;
+      hsu_seed_addr  = '0;
+      hsu_seed_wdata = '0;
+      tr_seed_req    = 1'b0;
+      tr_seed_we     = 1'b0;
+      tr_seed_addr   = '0;
+      tr_seed_wdata  = '0;
+    end
+  endtask
+
   task automatic clear_all;
     begin
-      wipe_i             = 1'b0;
-
-      pau_req            = 1'b0;
-      pau_poly_id        = '0;
-      pau_rd_en          = 1'b0;
-      pau_rd_idx         = '0;
-      pau_rd_lane_valid  = '0;
-      pau_wr_en          = '0;
-      pau_wr_idx         = '0;
-      pau_wr_data        = '0;
-
-      hsu_req            = 1'b0;
-      hsu_poly_id        = '0;
-      hsu_rd_en          = 1'b0;
-      hsu_rd_idx         = '0;
-      hsu_rd_lane_valid  = '0;
-      hsu_wr_en          = '0;
-      hsu_wr_idx         = '0;
-      hsu_wr_data        = '0;
-
-      tr_req             = 1'b0;
-      tr_poly_id         = '0;
-      tr_rd_en           = 1'b0;
-      tr_rd_idx          = '0;
-      tr_rd_lane_valid   = '0;
-      tr_wr_en           = '0;
-      tr_wr_idx          = '0;
-      tr_wr_data         = '0;
-
-      seed_req           = 1'b0;
-      seed_we            = 1'b0;
-      seed_addr          = '0;
-      seed_wdata         = '0;
+      wipe_i = 1'b0;
+      clear_poly_clients();
+      clear_seed_clients();
     end
   endtask
 
-  task automatic reset_all;
-    begin
-      clear_all();
-      rst = 1'b0;
-      repeat (3) tick();
-      rst = 1'b1;
-      repeat (2) tick();
-    end
-  endtask
-
-  task automatic pau_write_4(
+  task automatic prime_poly(
     input int poly_id,
     input int idx0, input int idx1, input int idx2, input int idx3,
     input logic [W-1:0] d0, input logic [W-1:0] d1,
     input logic [W-1:0] d2, input logic [W-1:0] d3
   );
     begin
-      @(posedge clk);
-      pau_req           <= 1'b1;
-      pau_poly_id       <= POLY_W'(poly_id);
-      pau_rd_en         <= 1'b0;
-      pau_wr_en         <= 4'b1111;
-      pau_wr_idx[0]     <= COEFF_W'(idx0);
-      pau_wr_idx[1]     <= COEFF_W'(idx1);
-      pau_wr_idx[2]     <= COEFF_W'(idx2);
-      pau_wr_idx[3]     <= COEFF_W'(idx3);
-      pau_wr_data[0]    <= d0;
-      pau_wr_data[1]    <= d1;
-      pau_wr_data[2]    <= d2;
-      pau_wr_data[3]    <= d3;
-
-      @(posedge clk);
-      pau_req        <= 1'b0;
-      pau_wr_en      <= '0;
-      pau_wr_idx     <= '0;
-      pau_wr_data    <= '0;
+      pau_req           = 1'b1;
+      pau_wr_en         = 4'b1111;
+      pau_wr_poly_id    = POLY_W'(poly_id);
+      pau_wr_idx[0]     = COEFF_W'(idx0);
+      pau_wr_idx[1]     = COEFF_W'(idx1);
+      pau_wr_idx[2]     = COEFF_W'(idx2);
+      pau_wr_idx[3]     = COEFF_W'(idx3);
+      pau_wr_data[0]    = d0;
+      pau_wr_data[1]    = d1;
+      pau_wr_data[2]    = d2;
+      pau_wr_data[3]    = d3;
+      tick();
+      clear_poly_clients();
     end
   endtask
 
-  task automatic pau_read_4_check(
+  task automatic check_pau_read(
     input int poly_id,
     input int idx0, input int idx1, input int idx2, input int idx3,
     input logic [W-1:0] e0, input logic [W-1:0] e1,
     input logic [W-1:0] e2, input logic [W-1:0] e3
   );
     begin
-      @(posedge clk);
-      pau_req              <= 1'b1;
-      pau_poly_id          <= POLY_W'(poly_id);
-      pau_rd_en            <= 1'b1;
-      pau_rd_idx[0]        <= COEFF_W'(idx0);
-      pau_rd_idx[1]        <= COEFF_W'(idx1);
-      pau_rd_idx[2]        <= COEFF_W'(idx2);
-      pau_rd_idx[3]        <= COEFF_W'(idx3);
-      pau_rd_lane_valid    <= 4'b1111;
+      pau_req           = 1'b1;
+      pau_rd_en         = 1'b1;
+      pau_rd_poly_id    = POLY_W'(poly_id);
+      pau_rd_idx[0]     = COEFF_W'(idx0);
+      pau_rd_idx[1]     = COEFF_W'(idx1);
+      pau_rd_idx[2]     = COEFF_W'(idx2);
+      pau_rd_idx[3]     = COEFF_W'(idx3);
+      pau_rd_lane_valid = 4'b1111;
+      tick();
 
-      @(posedge clk);
-      pau_req           <= 1'b0;
-      pau_rd_en         <= 1'b0;
-      pau_rd_lane_valid <= '0;
-
-      #1;
       if (!pau_rd_valid)
-        $fatal(1, "PAU read response expected");
+        $fatal(1, "Expected PAU read response");
       if (pau_rd_data[0] !== e0 || pau_rd_data[1] !== e1 ||
           pau_rd_data[2] !== e2 || pau_rd_data[3] !== e3)
-        $fatal(1, "PAU vector read mismatch");
-    end
-  endtask
-
-  task automatic hsu_write_4(
-    input int poly_id,
-    input int idx0, input int idx1, input int idx2, input int idx3,
-    input logic [W-1:0] d0, input logic [W-1:0] d1,
-    input logic [W-1:0] d2, input logic [W-1:0] d3
-  );
-    begin
-      @(posedge clk);
-      hsu_req           <= 1'b1;
-      hsu_poly_id       <= POLY_W'(poly_id);
-      hsu_rd_en         <= 1'b0;
-      hsu_wr_en         <= 4'b1111;
-      hsu_wr_idx[0]     <= COEFF_W'(idx0);
-      hsu_wr_idx[1]     <= COEFF_W'(idx1);
-      hsu_wr_idx[2]     <= COEFF_W'(idx2);
-      hsu_wr_idx[3]     <= COEFF_W'(idx3);
-      hsu_wr_data[0]    <= d0;
-      hsu_wr_data[1]    <= d1;
-      hsu_wr_data[2]    <= d2;
-      hsu_wr_data[3]    <= d3;
-
-      @(posedge clk);
-      hsu_req        <= 1'b0;
-      hsu_wr_en      <= '0;
-      hsu_wr_idx     <= '0;
-      hsu_wr_data    <= '0;
-    end
-  endtask
-
-  task automatic tr_read_4_check(
-    input int poly_id,
-    input int idx0, input int idx1, input int idx2, input int idx3,
-    input logic [W-1:0] e0, input logic [W-1:0] e1,
-    input logic [W-1:0] e2, input logic [W-1:0] e3
-  );
-    begin
-      @(posedge clk);
-      tr_req              <= 1'b1;
-      tr_poly_id          <= POLY_W'(poly_id);
-      tr_rd_en            <= 1'b1;
-      tr_rd_idx[0]        <= COEFF_W'(idx0);
-      tr_rd_idx[1]        <= COEFF_W'(idx1);
-      tr_rd_idx[2]        <= COEFF_W'(idx2);
-      tr_rd_idx[3]        <= COEFF_W'(idx3);
-      tr_rd_lane_valid    <= 4'b1111;
-
-      @(posedge clk);
-      tr_req           <= 1'b0;
-      tr_rd_en         <= 1'b0;
-      tr_rd_lane_valid <= '0;
-
-      #1;
-      if (!tr_rd_valid)
-        $fatal(1, "Transcoder read response expected");
-      if (tr_rd_data[0] !== e0 || tr_rd_data[1] !== e1 ||
-          tr_rd_data[2] !== e2 || tr_rd_data[3] !== e3)
-        $fatal(1, "Transcoder vector read mismatch");
-    end
-  endtask
-
-  task automatic seed_write_then_read_check;
-    begin
-      @(posedge clk);
-      seed_req   <= 1'b1;
-      seed_we    <= 1'b1;
-      seed_addr  <= SEED_AW'(3);
-      seed_wdata <= 64'h0123_4567_89AB_CDEF;
-
-      @(posedge clk);
-      seed_req   <= 1'b0;
-      seed_we    <= 1'b0;
-      seed_wdata <= '0;
-
-      @(posedge clk);
-      seed_req  <= 1'b1;
-      seed_we   <= 1'b0;
-      seed_addr <= SEED_AW'(3);
-
-      @(posedge clk);
-      seed_req <= 1'b0;
-
-      #1;
-      if (!seed_rvalid)
-        $fatal(1, "Seed read response expected");
-      if (seed_rdata !== 64'h0123_4567_89AB_CDEF)
-        $fatal(1, "Seed read mismatch");
+        $fatal(1, "PAU read mismatch");
+      clear_poly_clients();
     end
   endtask
 
   initial begin
-    reset_all();
+    rst = 1'b1;
+    clear_all();
+    repeat (2) tick();
+    rst = 1'b0;
+    tick();
 
-    // ----------------------------------------------------------
-    // 1) PAU vector write/read
-    // ----------------------------------------------------------
-    pau_write_4(2, 0, 1, 2, 3, 16'h1000, 16'h1001, 16'h1002, 16'h1003);
-    pau_read_4_check(2, 0, 1, 2, 3, 16'h1000, 16'h1001, 16'h1002, 16'h1003);
+    // ------------------------------------------------------------------
+    // Prime data used by later overlap checks.
+    // ------------------------------------------------------------------
+    prime_poly(2, 0, 1, 2, 3, 16'h1200, 16'h1201, 16'h1202, 16'h1203);
+    prime_poly(6, 12, 13, 14, 15, 16'h6600, 16'h6601, 16'h6602, 16'h6603);
 
-    // ----------------------------------------------------------
-    // 2) HSU writes a sampled row, Transcoder reads it later
-    // ----------------------------------------------------------
-    hsu_write_4(5, 4, 5, 6, 7, 16'h2000, 16'h2001, 16'h2002, 16'h2003);
-    tr_read_4_check(5, 4, 5, 6, 7, 16'h2000, 16'h2001, 16'h2002, 16'h2003);
+    // ------------------------------------------------------------------
+    // 1) CWM-like overlap: PAU read-only + HSU write-only in same cycle.
+    //    Both should be accepted because read uses Port A and write uses
+    //    Port B on the shared banked polynomial memory.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
 
-    // ----------------------------------------------------------
-    // 3) Arbitration: PAU beats HSU and HSU must not see PAU read data
-    // ----------------------------------------------------------
-    @(posedge clk);
-    pau_req           <= 1'b1;
-    pau_poly_id       <= POLY_W'(2);
-    pau_rd_en         <= 1'b1;
-    pau_rd_idx[0]     <= COEFF_W'(0);
-    pau_rd_idx[1]     <= COEFF_W'(1);
-    pau_rd_idx[2]     <= COEFF_W'(2);
-    pau_rd_idx[3]     <= COEFF_W'(3);
-    pau_rd_lane_valid <= 4'b1111;
-
-    hsu_req           <= 1'b1;
-    hsu_poly_id       <= POLY_W'(5);
-    hsu_rd_en         <= 1'b1;
-    hsu_rd_idx[0]     <= COEFF_W'(4);
-    hsu_rd_idx[1]     <= COEFF_W'(5);
-    hsu_rd_idx[2]     <= COEFF_W'(6);
-    hsu_rd_idx[3]     <= COEFF_W'(7);
-    hsu_rd_lane_valid <= 4'b1111;
+    hsu_req           = 1'b1;
+    hsu_wr_en         = 4'b1111;
+    hsu_wr_poly_id    = POLY_W'(5);
+    hsu_wr_idx[0]     = COEFF_W'(8);
+    hsu_wr_idx[1]     = COEFF_W'(9);
+    hsu_wr_idx[2]     = COEFF_W'(10);
+    hsu_wr_idx[3]     = COEFF_W'(11);
+    hsu_wr_data[0]    = 16'h5000;
+    hsu_wr_data[1]    = 16'h5001;
+    hsu_wr_data[2]    = 16'h5002;
+    hsu_wr_data[3]    = 16'h5003;
     #1;
 
-    if (pau_stall !== 1'b0)
-      $fatal(1, "PAU should win arbitration");
-    if (hsu_stall !== 1'b1)
-      $fatal(1, "HSU should stall behind PAU");
+    if (pau_stall)
+      $fatal(1, "PAU read-only request should not stall during HSU write overlap");
+    if (hsu_stall)
+      $fatal(1, "HSU write-only request should overlap with PAU read-only request");
 
-    @(posedge clk);
-    pau_req           <= 1'b0;
-    pau_rd_en         <= 1'b0;
-    pau_rd_lane_valid <= '0;
-    hsu_req           <= 1'b0;
-    hsu_rd_en         <= 1'b0;
-    hsu_rd_lane_valid <= '0;
+    tick();
 
-    #1;
     if (!pau_rd_valid)
-      $fatal(1, "PAU response expected");
-    if (hsu_rd_valid)
-      $fatal(1, "HSU must not see PAU read response");
+      $fatal(1, "Expected PAU read response during CWM-like overlap");
+    if (pau_rd_data[0] !== 16'h1200 || pau_rd_data[1] !== 16'h1201 ||
+        pau_rd_data[2] !== 16'h1202 || pau_rd_data[3] !== 16'h1203)
+      $fatal(1, "PAU overlap read data mismatch");
+    clear_poly_clients();
 
-    // ----------------------------------------------------------
-    // 4) Seed store path
-    // ----------------------------------------------------------
-    seed_write_then_read_check();
+    check_pau_read(5, 8, 9, 10, 11, 16'h5000, 16'h5001, 16'h5002, 16'h5003);
 
-    // ----------------------------------------------------------
-    // 5) Wipe clears both polynomial memory and seed store
-    // ----------------------------------------------------------
-    @(posedge clk);
-    wipe_i <= 1'b1;
-    @(posedge clk);
-    wipe_i <= 1'b0;
+    // ------------------------------------------------------------------
+    // 2) Lower-priority overlap still works across planes:
+    //    HSU read-only + Transcoder write-only in same cycle.
+    // ------------------------------------------------------------------
+    hsu_req           = 1'b1;
+    hsu_rd_en         = 1'b1;
+    hsu_rd_poly_id    = POLY_W'(6);
+    hsu_rd_idx[0]     = COEFF_W'(12);
+    hsu_rd_idx[1]     = COEFF_W'(13);
+    hsu_rd_idx[2]     = COEFF_W'(14);
+    hsu_rd_idx[3]     = COEFF_W'(15);
+    hsu_rd_lane_valid = 4'b1111;
+
+    tr_req            = 1'b1;
+    tr_wr_en          = 4'b1111;
+    tr_wr_poly_id     = POLY_W'(7);
+    tr_wr_idx[0]      = COEFF_W'(4);
+    tr_wr_idx[1]      = COEFF_W'(5);
+    tr_wr_idx[2]      = COEFF_W'(6);
+    tr_wr_idx[3]      = COEFF_W'(7);
+    tr_wr_data[0]     = 16'h7000;
+    tr_wr_data[1]     = 16'h7001;
+    tr_wr_data[2]     = 16'h7002;
+    tr_wr_data[3]     = 16'h7003;
+    #1;
+
+    if (hsu_stall)
+      $fatal(1, "HSU read-only request should not stall during Transcoder write overlap");
+    if (tr_stall)
+      $fatal(1, "Transcoder write-only request should overlap with HSU read-only request");
+
+    tick();
+
+    if (!hsu_rd_valid)
+      $fatal(1, "Expected HSU read response during overlap");
+    if (hsu_rd_data[0] !== 16'h6600 || hsu_rd_data[1] !== 16'h6601 ||
+        hsu_rd_data[2] !== 16'h6602 || hsu_rd_data[3] !== 16'h6603)
+      $fatal(1, "HSU overlap read data mismatch");
+    clear_poly_clients();
+
+    check_pau_read(7, 4, 5, 6, 7, 16'h7000, 16'h7001, 16'h7002, 16'h7003);
+
+    // ------------------------------------------------------------------
+    // 3) NTT-like PAU combined request owns both planes.
+    //    HSU write-only must stall even though the write plane exists,
+    //    because the combined PAU request is treated atomically.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+    pau_wr_en         = 4'b1111;
+    pau_wr_poly_id    = POLY_W'(8);
+    pau_wr_idx[0]     = COEFF_W'(16);
+    pau_wr_idx[1]     = COEFF_W'(17);
+    pau_wr_idx[2]     = COEFF_W'(18);
+    pau_wr_idx[3]     = COEFF_W'(19);
+    pau_wr_data[0]    = 16'h8A00;
+    pau_wr_data[1]    = 16'h8A01;
+    pau_wr_data[2]    = 16'h8A02;
+    pau_wr_data[3]    = 16'h8A03;
+
+    hsu_req           = 1'b1;
+    hsu_wr_en         = 4'b1111;
+    hsu_wr_poly_id    = POLY_W'(9);
+    hsu_wr_idx[0]     = COEFF_W'(20);
+    hsu_wr_idx[1]     = COEFF_W'(21);
+    hsu_wr_idx[2]     = COEFF_W'(22);
+    hsu_wr_idx[3]     = COEFF_W'(23);
+    hsu_wr_data[0]    = 16'h9B00;
+    hsu_wr_data[1]    = 16'h9B01;
+    hsu_wr_data[2]    = 16'h9B02;
+    hsu_wr_data[3]    = 16'h9B03;
+    #1;
+
+    if (pau_stall)
+      $fatal(1, "PAU combined read/write request should own both planes");
+    if (!hsu_stall)
+      $fatal(1, "HSU must stall behind a combined PAU request");
+
+    tick();
+
+    if (!pau_rd_valid)
+      $fatal(1, "Expected PAU read response during NTT-like combined request");
+    clear_poly_clients();
+    check_pau_read(8, 16, 17, 18, 19, 16'h8A00, 16'h8A01, 16'h8A02, 16'h8A03);
+
+    // HSU retries after the PAU-owned cycle.
+    hsu_req           = 1'b1;
+    hsu_wr_en         = 4'b1111;
+    hsu_wr_poly_id    = POLY_W'(9);
+    hsu_wr_idx[0]     = COEFF_W'(20);
+    hsu_wr_idx[1]     = COEFF_W'(21);
+    hsu_wr_idx[2]     = COEFF_W'(22);
+    hsu_wr_idx[3]     = COEFF_W'(23);
+    hsu_wr_data[0]    = 16'h9B00;
+    hsu_wr_data[1]    = 16'h9B01;
+    hsu_wr_data[2]    = 16'h9B02;
+    hsu_wr_data[3]    = 16'h9B03;
+    tick();
+    clear_poly_clients();
+
+    check_pau_read(9, 20, 21, 22, 23, 16'h9B00, 16'h9B01, 16'h9B02, 16'h9B03);
+
+    // ------------------------------------------------------------------
+    // 4) Seed/protocol store: HSU and Transcoder can both use it in the same
+    //    cycle because the store is now explicitly dual-port.
+    // ------------------------------------------------------------------
+    hsu_seed_req   = 1'b1;
+    hsu_seed_we    = 1'b1;
+    hsu_seed_addr  = SEED_AW'(12);
+    hsu_seed_wdata = 64'h1122_3344_5566_7788;
+    tr_seed_req    = 1'b1;
+    tr_seed_we     = 1'b1;
+    tr_seed_addr   = SEED_AW'(16);
+    tr_seed_wdata  = 64'h99AA_BBCC_DDEE_FF00;
+    #1;
+
+    if (!hsu_seed_ready || !tr_seed_ready)
+      $fatal(1, "Both seed ports should be ready outside wipe");
+
+    tick();
+    clear_seed_clients();
+
+    hsu_seed_req  = 1'b1;
+    hsu_seed_addr = SEED_AW'(12);
+    tr_seed_req   = 1'b1;
+    tr_seed_addr  = SEED_AW'(16);
+    tick();
+    clear_seed_clients();
+
+    if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h1122_3344_5566_7788)
+      $fatal(1, "HSU seed-port readback mismatch");
+    if (!tr_seed_rvalid || tr_seed_rdata !== 64'h99AA_BBCC_DDEE_FF00)
+      $fatal(1, "Transcoder seed-port readback mismatch");
+
+    // ------------------------------------------------------------------
+    // 5) Wipe blocks all users and clears both poly + seed storage.
+    // ------------------------------------------------------------------
+    wipe_i = 1'b1;
+    tick();
+    wipe_i = 1'b0;
+
+    if (hsu_seed_ready || tr_seed_ready)
+      $fatal(1, "Seed ports must report not-ready during wipe");
 
     wait (wipe_done_o == 1'b1);
-    @(posedge clk);
+    tick();
 
-    pau_read_4_check(2, 0, 1, 2, 3, 16'h0000, 16'h0000, 16'h0000, 16'h0000);
+    check_pau_read(5, 8, 9, 10, 11, 16'h0000, 16'h0000, 16'h0000, 16'h0000);
 
-    @(posedge clk);
-    seed_req  <= 1'b1;
-    seed_we   <= 1'b0;
-    seed_addr <= SEED_AW'(3);
-    @(posedge clk);
-    seed_req <= 1'b0;
-    #1;
-    if (!seed_rvalid || seed_rdata !== 64'h0)
+    hsu_seed_req  = 1'b1;
+    hsu_seed_addr = SEED_AW'(12);
+    tick();
+    clear_seed_clients();
+    if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h0)
       $fatal(1, "Seed wipe failed");
 
     $display("TB PASS");

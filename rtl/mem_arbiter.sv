@@ -8,7 +8,7 @@
  *   H. Jung, Q. D. Truong, H. Lee — IEEE OJCAS 2025
  *
  * Description:
- *   Centralized priority arbiter for the shared polynomial-memory request
+ *   Centralized priority arbiter for one shared polynomial-memory request
  *   plane inside the Memory Subsystem.
  *
  *   Implements the Arbitrator block from the reference architecture with
@@ -17,10 +17,13 @@
  *     - HSU (Hash Sampling Unit): mid, Poly Stream Writer coefficient loads
  *     - Transcoder: lowest, ByteEncode/Decode and Compress/Decompress
  *
- *   Only one client wins the shared vector transaction slot each cycle.
- *   The winning client sees downstream stall if the polynomial memory
- *   wrapper cannot accept its request. Lower-priority requesting clients
- *   are stalled immediately.
+ *   This arbiter is instantiated independently for:
+ *     - the read plane
+ *     - the write plane
+ *
+ *   Only one client wins each plane in a cycle. The winning client sees
+ *   downstream stall if the polynomial memory wrapper cannot accept its
+ *   request. Lower-priority requesting clients are stalled immediately.
  *
  * Notes:
  *   - This arbiter chooses an owner only. poly_mem_subsystem performs the

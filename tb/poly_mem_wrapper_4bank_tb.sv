@@ -2,148 +2,170 @@
 
 module poly_mem_wrapper_4bank_tb;
 
-  parameter int N = 256;
-  parameter int W = 16;
-  parameter int NUM_POLYS = 4;
+  localparam int N         = 256;
+  localparam int W         = 16;
+  localparam int NUM_POLYS = 8;
+  localparam int POLY_W    = $clog2(NUM_POLYS);
+  localparam int COEFF_W   = $clog2(N);
 
-  logic clk;
-  logic rst;
+  logic clk, rst;
 
-  logic [$clog2(NUM_POLYS)-1:0] poly_id_i;
-  logic                         v_i;
-  logic                         rd_en_i;
-  logic                         ready_o;
+  logic [POLY_W-1:0]    rd_poly_id_i;
+  logic                 rd_v_i;
+  logic [3:0][COEFF_W-1:0] rd_idx_i;
+  logic [3:0]          rd_lane_valid_i;
+  logic                rd_ready_o;
+  logic                rd_valid_o;
+  logic [POLY_W-1:0]   rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0] rd_idx_o;
+  logic [3:0]          rd_lane_valid_o;
+  logic [3:0][W-1:0]   rd_data_o;
 
-  logic [3:0][$clog2(N)-1:0]    rd_idx_i;
-  logic [3:0]                   rd_lane_valid_i;
+  logic [POLY_W-1:0]    wr_poly_id_i;
+  logic                 wr_v_i;
+  logic [3:0]          wr_en_i;
+  logic [3:0][COEFF_W-1:0] wr_idx_i;
+  logic [3:0][W-1:0]   wr_data_i;
+  logic                wr_ready_o;
 
-  logic                         rd_valid_o;
-  logic [$clog2(NUM_POLYS)-1:0] rd_poly_id_o;
-  logic [3:0][$clog2(N)-1:0]    rd_idx_o;
-  logic [3:0]                   rd_lane_valid_o;
-  logic [3:0][W-1:0]            rd_data_o;
-
-  logic [3:0]                   wr_en_i;
-  logic [3:0][$clog2(N)-1:0]    wr_idx_i;
-  logic [3:0][W-1:0]            wr_data_i;
-
-  // DUT
   poly_mem_wrapper_4bank #(
     .N(N),
     .W(W),
     .NUM_POLYS(NUM_POLYS)
-  ) DUT (
-    .clk                 (clk),
-    .rst                 (rst),
-    .poly_id_i           (poly_id_i),
-    .v_i                 (v_i),
-    .rd_en_i             (rd_en_i),
-    .ready_o             (ready_o),
-    .rd_idx_i            (rd_idx_i),
-    .rd_lane_valid_i     (rd_lane_valid_i),
-    .rd_valid_o          (rd_valid_o),
-    .rd_poly_id_o        (rd_poly_id_o),
-    .rd_idx_o            (rd_idx_o),
-    .rd_lane_valid_o     (rd_lane_valid_o),
-    .rd_data_o           (rd_data_o),
-    .wr_en_i             (wr_en_i),
-    .wr_idx_i            (wr_idx_i),
-    .wr_data_i           (wr_data_i)
+  ) dut (
+    .clk(clk),
+    .rst(rst),
+    .rd_poly_id_i(rd_poly_id_i),
+    .rd_v_i(rd_v_i),
+    .rd_idx_i(rd_idx_i),
+    .rd_lane_valid_i(rd_lane_valid_i),
+    .rd_ready_o(rd_ready_o),
+    .rd_valid_o(rd_valid_o),
+    .rd_poly_id_o(rd_poly_id_o),
+    .rd_idx_o(rd_idx_o),
+    .rd_lane_valid_o(rd_lane_valid_o),
+    .rd_data_o(rd_data_o),
+    .wr_poly_id_i(wr_poly_id_i),
+    .wr_v_i(wr_v_i),
+    .wr_en_i(wr_en_i),
+    .wr_idx_i(wr_idx_i),
+    .wr_data_i(wr_data_i),
+    .wr_ready_o(wr_ready_o)
   );
 
-  // Clock
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
+  task automatic tick;
+    begin
+      @(posedge clk);
+      #1;
+    end
+  endtask
+
+  task automatic clear_all;
+    begin
+      rd_poly_id_i     = '0;
+      rd_v_i           = 1'b0;
+      rd_idx_i         = '0;
+      rd_lane_valid_i  = '0;
+      wr_poly_id_i     = '0;
+      wr_v_i           = 1'b0;
+      wr_en_i          = '0;
+      wr_idx_i         = '0;
+      wr_data_i        = '0;
+    end
+  endtask
+
   initial begin
-    // Reset / init
-    rst             = 1'b0;
-    poly_id_i       = '0;
-    v_i             = 1'b0;
-    rd_en_i         = 1'b0;
-    rd_idx_i        = '0;
-    rd_lane_valid_i = '0;
-    wr_en_i         = '0;
-    wr_idx_i        = '0;
-    wr_data_i       = '0;
-
-    #20;
     rst = 1'b1;
+    clear_all();
+    repeat (2) tick();
+    rst = 1'b0;
+    tick();
 
-    // --------------------------------------------------
-    // WRITE 4 values to 4 indices that should map cleanly
-    // --------------------------------------------------
-    @(posedge clk);
-    v_i       <= 1'b1;
-    rd_en_i   <= 1'b0;
-    poly_id_i <= 2'd0;
+    // ----------------------------------------------------------
+    // Write four coefficients using only the write plane.
+    // ----------------------------------------------------------
+    wr_poly_id_i    = POLY_W'(2);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b1111;
+    wr_idx_i[0]     = COEFF_W'(0);
+    wr_idx_i[1]     = COEFF_W'(1);
+    wr_idx_i[2]     = COEFF_W'(2);
+    wr_idx_i[3]     = COEFF_W'(3);
+    wr_data_i[0]    = 16'h1000;
+    wr_data_i[1]    = 16'h1001;
+    wr_data_i[2]    = 16'h1002;
+    wr_data_i[3]    = 16'h1003;
+    if (!wr_ready_o)
+      $fatal(1, "Expected write plane ready for indices 0..3");
+    tick();
+    clear_all();
 
-    wr_en_i[0]   <= 1'b1;
-    wr_en_i[1]   <= 1'b1;
-    wr_en_i[2]   <= 1'b1;
-    wr_en_i[3]   <= 1'b1;
+    // ----------------------------------------------------------
+    // Simultaneous read-plane and write-plane use.
+    // ----------------------------------------------------------
+    rd_poly_id_i    = POLY_W'(2);
+    rd_v_i          = 1'b1;
+    rd_idx_i[0]     = COEFF_W'(0);
+    rd_idx_i[1]     = COEFF_W'(1);
+    rd_idx_i[2]     = COEFF_W'(2);
+    rd_idx_i[3]     = COEFF_W'(3);
+    rd_lane_valid_i = 4'b1111;
 
-    wr_idx_i[0]  <= 8'd2;
-    wr_idx_i[1]  <= 8'd66;
-    wr_idx_i[2]  <= 8'd130;
-    wr_idx_i[3]  <= 8'd194;
+    wr_poly_id_i    = POLY_W'(3);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b1111;
+    wr_idx_i[0]     = COEFF_W'(4);
+    wr_idx_i[1]     = COEFF_W'(5);
+    wr_idx_i[2]     = COEFF_W'(6);
+    wr_idx_i[3]     = COEFF_W'(7);
+    wr_data_i[0]    = 16'h2000;
+    wr_data_i[1]    = 16'h2001;
+    wr_data_i[2]    = 16'h2002;
+    wr_data_i[3]    = 16'h2003;
 
-    wr_data_i[0] <= 16'hA000;
-    wr_data_i[1] <= 16'hA001;
-    wr_data_i[2] <= 16'hA002;
-    wr_data_i[3] <= 16'hA003;
+    if (!rd_ready_o || !wr_ready_o)
+      $fatal(1, "Expected simultaneous read/write plane readiness");
+    tick();
 
-    @(posedge clk);
-    wr_en_i <= 4'b0000;
+    if (!rd_valid_o)
+      $fatal(1, "Expected read response after simultaneous plane use");
+    if (rd_data_o[0] !== 16'h1000 || rd_data_o[1] !== 16'h1001 ||
+        rd_data_o[2] !== 16'h1002 || rd_data_o[3] !== 16'h1003)
+      $fatal(1, "Read-plane data mismatch after simultaneous plane use");
+    clear_all();
 
-    @(posedge clk);
-    v_i       <= 1'b1;
-    rd_en_i   <= 1'b0;
-    poly_id_i <= 2'd0;
+    // ----------------------------------------------------------
+    // Read conflict: indices 1 and 4 both map to bank 1 under CMI.
+    // ----------------------------------------------------------
+    rd_v_i           = 1'b1;
+    rd_idx_i[0]      = COEFF_W'(1);
+    rd_idx_i[1]      = COEFF_W'(4);
+    rd_idx_i[2]      = COEFF_W'(0);
+    rd_idx_i[3]      = COEFF_W'(3);
+    rd_lane_valid_i  = 4'b1111;
+    #1;
+    if (rd_ready_o)
+      $fatal(1, "Expected read conflict for indices 1 and 4");
+    clear_all();
 
-    wr_en_i[0] <= 1'b1;
-    wr_en_i[1]  <= 1'b1;
-    wr_en_i[2]   <= 1'b1;
-    wr_en_i[3]   <= 1'b1;
+    // ----------------------------------------------------------
+    // Write conflict: same conflict pattern on Port B.
+    // ----------------------------------------------------------
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b1111;
+    wr_idx_i[0]     = COEFF_W'(1);
+    wr_idx_i[1]     = COEFF_W'(4);
+    wr_idx_i[2]     = COEFF_W'(0);
+    wr_idx_i[3]     = COEFF_W'(3);
+    #1;
+    if (wr_ready_o)
+      $fatal(1, "Expected write conflict for indices 1 and 4");
+    clear_all();
 
-    wr_idx_i[0]<= 8'd1;
-    wr_idx_i[1] <= 8'd65;
-    wr_idx_i[2]  <= 8'd129;
-    wr_idx_i[3]  <= 8'd193;
-
-    wr_data_i[0]= 16'hA004;
-    wr_data_i[1]<= 16'hA005;
-    wr_data_i[2] <= 16'hA006;
-    wr_data_i[3] <= 16'hA007;
-
-    @(posedge clk);
-    wr_en_i <= 4'b0000;
-
-    // --------------------------------------------------
-    // READ BACK same 4 indices
-    // --------------------------------------------------
-    @(posedge clk);
-    rd_en_i         <= 1'b1;
-    rd_lane_valid_i <= 4'b1111;
-    rd_idx_i[0]     <= 8'd1;
-    rd_idx_i[1]     <= 8'd65;
-    rd_idx_i[2]     <= 8'd129;
-    rd_idx_i[3]     <= 8'd193;
-
-    @(posedge clk); // request accepted into wrapper
-    @(posedge clk); // RAM data aligned to output response
-
-    rd_en_i         <= 1'b1;
-    rd_lane_valid_i <= 4'b1111;
-    rd_idx_i[0]     <= 8'd2;
-    rd_idx_i[1]     <= 8'd66;
-    rd_idx_i[2]     <= 8'd130;
-    rd_idx_i[3]     <= 8'd194;
-
-    @(posedge clk); // request accepted into wrapper
-    @(posedge clk); // RAM data aligned to output response
-
-    #20;
+    $display("TB PASS");
     $finish;
   end
 

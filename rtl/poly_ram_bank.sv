@@ -13,6 +13,12 @@
  *     - Each port can read or write in the same clock cycle
  *     - Reads are synchronous (data returned on next clock)
  *
+ *   Reset notes:
+ *     - Reset is active-high and synchronous.
+ *     - Reset clears only the registered read outputs.
+ *     - Memory contents are intentionally not reset here; the top-level wipe
+ *       FSM is responsible for zeroising polynomial storage.
+ *
  *   Why we need this:
  *     Higher-level modules (like poly_mem_wrapper_4bank or poly_mem_subsystem)
  *     connect several of these banks together to allow parallel access to
@@ -29,7 +35,7 @@ module poly_ram_bank #(
   parameter int ADDR_W = $clog2(N)     // Address width needed for N entries
 )(
   input  logic              clk,       // System clock
-  input  logic              rst,       // Active-low reset (not used internally here)
+  input  logic              rst,       // Active-high synchronous reset
 
   // --------------------------------------------------------------------------
   // PORT A (first memory port)
@@ -72,10 +78,14 @@ module poly_ram_bank #(
   //   The read data appears AFTER the clock edge (synchronous read).
   // --------------------------------------------------------------------------
   always_ff @(posedge clk) begin
-    if (a_we)                       // If write enable is active
-      mem[a_addr] <= a_wdata;       // Write new data into memory
+    if (rst) begin
+      a_rdata <= '0;
+    end else begin
+      if (a_we)                       // If write enable is active
+        mem[a_addr] <= a_wdata;       // Write new data into memory
 
-    a_rdata <= mem[a_addr];         // Read data from the same address
+      a_rdata <= mem[a_addr];         // Read data from the same address
+    end
   end
 
   // --------------------------------------------------------------------------
@@ -85,10 +95,14 @@ module poly_ram_bank #(
   // This allows two accesses in the same clock cycle.
   // --------------------------------------------------------------------------
   always_ff @(posedge clk) begin
-    if (b_we)                       // If Port B write enable is active
-      mem[b_addr] <= b_wdata;       // Write data to memory
+    if (rst) begin
+      b_rdata <= '0;
+    end else begin
+      if (b_we)                       // If Port B write enable is active
+        mem[b_addr] <= b_wdata;       // Write data to memory
 
-    b_rdata <= mem[b_addr];         // Read memory value
+      b_rdata <= mem[b_addr];         // Read memory value
+    end
   end
 
 endmodule
