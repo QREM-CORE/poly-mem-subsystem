@@ -27,6 +27,8 @@ module poly_mem_wrapper_4bank_tb;
   logic [3:0][COEFF_W-1:0] wr_idx_i;
   logic [3:0][W-1:0]   wr_data_i;
   logic                wr_ready_o;
+  logic                fault_o;
+  logic [2:0]          fault_code_o;
 
   poly_mem_wrapper_4bank #(
     .N(N),
@@ -50,7 +52,9 @@ module poly_mem_wrapper_4bank_tb;
     .wr_en_i(wr_en_i),
     .wr_idx_i(wr_idx_i),
     .wr_data_i(wr_data_i),
-    .wr_ready_o(wr_ready_o)
+    .wr_ready_o(wr_ready_o),
+    .fault_o(fault_o),
+    .fault_code_o(fault_code_o)
   );
 
   initial clk = 1'b0;
@@ -138,6 +142,32 @@ module poly_mem_wrapper_4bank_tb;
     clear_all();
 
     // ----------------------------------------------------------
+    // Same-bank read + write to different addresses is allowed.
+    // Port A services the read and Port B services the write, so
+    // only same-address mixed-port hazards are forbidden.
+    // idx 0 and idx 10 both map to bank 0 under the CMI function.
+    // ----------------------------------------------------------
+    rd_poly_id_i    = POLY_W'(2);
+    rd_v_i          = 1'b1;
+    rd_idx_i[0]     = COEFF_W'(0);
+    rd_lane_valid_i = 4'b0001;
+
+    wr_poly_id_i    = POLY_W'(2);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b0001;
+    wr_idx_i[0]     = COEFF_W'(10);
+    wr_data_i[0]    = 16'h10AA;
+    #1;
+    if (!rd_ready_o || !wr_ready_o)
+      $fatal(1, "Expected same-bank different-address read/write overlap to succeed");
+    if (fault_o)
+      $fatal(1, "Did not expect a fault for same-bank different-address read/write");
+    tick();
+    if (!rd_valid_o || rd_data_o[0] !== 16'h1000)
+      $fatal(1, "Expected original read data during same-bank different-address overlap");
+    clear_all();
+
+    // ----------------------------------------------------------
     // Read conflict: indices 1 and 4 both map to bank 1 under CMI.
     // ----------------------------------------------------------
     rd_v_i           = 1'b1;
@@ -163,6 +193,59 @@ module poly_mem_wrapper_4bank_tb;
     #1;
     if (wr_ready_o)
       $fatal(1, "Expected write conflict for indices 1 and 4");
+    clear_all();
+
+    // ----------------------------------------------------------
+    // Same-address read + write is explicitly forbidden.
+    // ----------------------------------------------------------
+    rd_poly_id_i    = POLY_W'(2);
+    rd_v_i          = 1'b1;
+    rd_idx_i[0]     = COEFF_W'(0);
+    rd_lane_valid_i = 4'b0001;
+    wr_poly_id_i    = POLY_W'(2);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b0001;
+    wr_idx_i[0]     = COEFF_W'(0);
+    wr_data_i[0]    = 16'hDEAD;
+    #1;
+    if (rd_ready_o || wr_ready_o)
+      $fatal(1, "Expected same-address read/write to be rejected");
+    if (!fault_o || fault_code_o !== 3'b001)
+      $fatal(1, "Expected same-address read/write fault code");
+    clear_all();
+
+    // ----------------------------------------------------------
+    // Same-address write + write is explicitly forbidden.
+    // ----------------------------------------------------------
+    wr_poly_id_i    = POLY_W'(2);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b0011;
+    wr_idx_i[0]     = COEFF_W'(20);
+    wr_idx_i[1]     = COEFF_W'(20);
+    wr_data_i[0]    = 16'hAAAA;
+    wr_data_i[1]    = 16'hBBBB;
+    #1;
+    if (wr_ready_o)
+      $fatal(1, "Expected same-address write/write to be rejected");
+    if (!fault_o || fault_code_o !== 3'b010)
+      $fatal(1, "Expected same-address write/write fault code");
+    clear_all();
+
+    // ----------------------------------------------------------
+    // Same-bank but different-address lane conflict reports generic fault.
+    // ----------------------------------------------------------
+    wr_poly_id_i    = POLY_W'(2);
+    wr_v_i          = 1'b1;
+    wr_en_i         = 4'b0011;
+    wr_idx_i[0]     = COEFF_W'(1);
+    wr_idx_i[1]     = COEFF_W'(4);
+    wr_data_i[0]    = 16'h1111;
+    wr_data_i[1]    = 16'h2222;
+    #1;
+    if (wr_ready_o)
+      $fatal(1, "Expected same-bank different-address conflict");
+    if (!fault_o || fault_code_o !== 3'b011)
+      $fatal(1, "Expected generic request-conflict fault code");
     clear_all();
 
     $display("TB PASS");

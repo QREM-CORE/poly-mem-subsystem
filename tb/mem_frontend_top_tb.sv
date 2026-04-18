@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 
+import qrem_seed_map_pkg::*;
+
 module mem_frontend_top_tb;
   // Integration TB for the v0.75 memory subsystem.
   // The old mem_frontend_top block was merged into poly_mem_subsystem, but
@@ -17,7 +19,10 @@ module mem_frontend_top_tb;
   logic clk;
   logic rst;
   logic wipe_i;
+  logic wipe_busy_o;
   logic wipe_done_o;
+  logic mem_fault_o;
+  logic [2:0] mem_fault_code_o;
 
   logic                           pau_req;
   logic                           pau_rd_en;
@@ -93,7 +98,10 @@ module mem_frontend_top_tb;
     .clk(clk),
     .rst(rst),
     .wipe_i(wipe_i),
+    .wipe_busy_o(wipe_busy_o),
     .wipe_done_o(wipe_done_o),
+    .mem_fault_o(mem_fault_o),
+    .mem_fault_code_o(mem_fault_code_o),
     .pau_req(pau_req),
     .pau_rd_en(pau_rd_en),
     .pau_rd_poly_id(pau_rd_poly_id),
@@ -466,22 +474,49 @@ module mem_frontend_top_tb;
       $fatal(1, "Transcoder seed-port readback mismatch");
 
     // ------------------------------------------------------------------
-    // 5) Wipe blocks all users and clears both poly + seed storage.
+    // 5) Illegal same-address read/write raises a memory fault and rejects
+    //    the request for that cycle.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_lane_valid = 4'b0001;
+    hsu_req           = 1'b1;
+    hsu_wr_en         = 4'b0001;
+    hsu_wr_poly_id    = POLY_W'(2);
+    hsu_wr_idx[0]     = COEFF_W'(0);
+    hsu_wr_data[0]    = 16'hFACE;
+    #1;
+
+    if (!pau_stall || !hsu_stall)
+      $fatal(1, "Expected same-address read/write to stall both clients");
+    tick();
+    if (!mem_fault_o || mem_fault_code_o !== 3'b001)
+      $fatal(1, "Expected memory fault pulse/code for same-address read/write");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 6) Wipe blocks all users and clears both poly + seed storage.
     // ------------------------------------------------------------------
     wipe_i = 1'b1;
     tick();
     wipe_i = 1'b0;
 
+    if (!wipe_busy_o)
+      $fatal(1, "wipe_busy_o should assert while wipe is active");
     if (hsu_seed_ready || tr_seed_ready)
       $fatal(1, "Seed ports must report not-ready during wipe");
 
     wait (wipe_done_o == 1'b1);
     tick();
+    if (wipe_busy_o)
+      $fatal(1, "wipe_busy_o should deassert after wipe completes");
 
     check_pau_read(5, 8, 9, 10, 11, 16'h0000, 16'h0000, 16'h0000, 16'h0000);
 
     hsu_seed_req  = 1'b1;
-    hsu_seed_addr = SEED_AW'(12);
+    hsu_seed_addr = qrem_seed_map_pkg::seed_base_addr(qrem_seed_map_pkg::SEED_ID_RHO);
     tick();
     clear_seed_clients();
     if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h0)

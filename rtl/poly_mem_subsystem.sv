@@ -21,6 +21,8 @@
  *   - Reset is active-high and synchronous.
  *   - During wipe, all polynomial clients stall and both seed ports report
  *     not-ready.
+ *   - Memory exposes a small internal-only control/status sideband for the
+ *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
  */
 
 import qrem_seed_map_pkg::*;
@@ -39,7 +41,10 @@ module poly_mem_subsystem #(
   // Security wipe
   // --------------------------------------------------------------------------
   input  logic wipe_i,
+  output logic wipe_busy_o,
   output logic wipe_done_o,
+  output logic mem_fault_o,
+  output logic [2:0] mem_fault_code_o,
 
   // ==========================================================================
   // PAU polynomial-memory interface
@@ -101,6 +106,9 @@ module poly_mem_subsystem #(
   // ==========================================================================
   // HSU seed / protocol port
   // ==========================================================================
+  // This remains a raw address-based RAM port at the memory boundary.
+  // The bridge-facing "seed_id + beat_idx" abstraction is built one level
+  // above this module using qrem_seed_map_pkg::seed_base_addr(...).
   input  logic                               hsu_seed_req,
   input  logic                               hsu_seed_we,
   input  logic [$clog2(SEED_DEPTH)-1:0]      hsu_seed_addr,
@@ -112,6 +120,8 @@ module poly_mem_subsystem #(
   // ==========================================================================
   // Transcoder seed / protocol port
   // ==========================================================================
+  // Like the HSU seed port, this is the physical address-based port into the
+  // dual-port Seed / Protocol Store. Semantic IDs are translated above memory.
   input  logic                               tr_seed_req,
   input  logic                               tr_seed_we,
   input  logic [$clog2(SEED_DEPTH)-1:0]      tr_seed_addr,
@@ -145,6 +155,10 @@ module poly_mem_subsystem #(
   logic [$clog2(NUM_POLYS)-1:0] wipe_poly_q, wipe_poly_d;
   logic [ROW_W-1:0]             wipe_row_q, wipe_row_d;
   logic [SEED_AW-1:0]           wipe_seed_q, wipe_seed_d;
+  logic                         poly_fault;
+  logic [2:0]                   poly_fault_code;
+  logic                         mem_fault_q;
+  logic [2:0]                   mem_fault_code_q;
 
   // --------------------------------------------------------------------------
   // Per-client request classification
@@ -169,6 +183,9 @@ module poly_mem_subsystem #(
   logic [COEFF_W-1:0] wipe_base_idx;
   assign wipe_active   = (wipe_state_q != WIPE_IDLE);
   assign wipe_base_idx = COEFF_W'({wipe_row_q, 2'b00});
+  assign wipe_busy_o   = wipe_active;
+  assign mem_fault_o   = mem_fault_q;
+  assign mem_fault_code_o = mem_fault_code_q;
 
   // --------------------------------------------------------------------------
   // Combined-owner detection
@@ -411,7 +428,9 @@ module poly_mem_subsystem #(
     .wr_en_i         (poly_wr_en_mux),
     .wr_idx_i        (poly_wr_idx_mux),
     .wr_data_i       (poly_wr_data_mux),
-    .wr_ready_o      (poly_wr_ready)
+    .wr_ready_o      (poly_wr_ready),
+    .fault_o         (poly_fault),
+    .fault_code_o    (poly_fault_code)
   );
 
   // --------------------------------------------------------------------------
@@ -591,6 +610,8 @@ module poly_mem_subsystem #(
       rd_owner_q         <= RD_OWNER_NONE;
       hsu_seed_read_fire_q <= 1'b0;
       tr_seed_read_fire_q  <= 1'b0;
+      mem_fault_q        <= 1'b0;
+      mem_fault_code_q   <= 3'b000;
     end else begin
       wipe_state_q       <= wipe_state_d;
       wipe_poly_q        <= wipe_poly_d;
@@ -599,6 +620,8 @@ module poly_mem_subsystem #(
       rd_owner_q         <= rd_owner_d;
       hsu_seed_read_fire_q <= hsu_seed_read_fire;
       tr_seed_read_fire_q  <= tr_seed_read_fire;
+      mem_fault_q        <= poly_fault;
+      mem_fault_code_q   <= poly_fault ? poly_fault_code : 3'b000;
     end
   end
 

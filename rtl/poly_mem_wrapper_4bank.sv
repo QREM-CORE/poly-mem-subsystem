@@ -21,6 +21,8 @@
  *   - Reset is active-high and synchronous.
  *   - Read response latency is 1 cycle from accepted read request.
  *   - CMI bit-pair-sum bank mapping is used for both planes.
+ *   - Same-address read+write in one cycle is explicitly forbidden.
+ *   - Same-address write+write in one cycle is explicitly forbidden.
  */
 
 module poly_mem_wrapper_4bank #(
@@ -54,7 +56,13 @@ module poly_mem_wrapper_4bank #(
   input  logic [3:0]                   wr_en_i,
   input  logic [3:0][$clog2(N)-1:0]    wr_idx_i,
   input  logic [3:0][W-1:0]            wr_data_i,
-  output logic                         wr_ready_o
+  output logic                         wr_ready_o,
+
+  // --------------------------------------------------------------------------
+  // Fault reporting
+  // --------------------------------------------------------------------------
+  output logic                         fault_o,
+  output logic [2:0]                   fault_code_o
 );
 
   initial begin
@@ -78,8 +86,17 @@ module poly_mem_wrapper_4bank #(
   logic                    wr_fire;
   logic                    rd_conflict;
   logic                    wr_conflict;
+  logic                    rw_same_addr_conflict;
+  logic                    ww_same_addr_conflict;
+  logic                    plane_conflict;
+  logic                    fault_detected;
   logic                    any_rd;
   logic                    any_wr;
+
+  localparam logic [2:0] MEM_FAULT_NONE            = 3'b000;
+  localparam logic [2:0] MEM_FAULT_RW_SAME_ADDR    = 3'b001;
+  localparam logic [2:0] MEM_FAULT_WW_SAME_ADDR    = 3'b010;
+  localparam logic [2:0] MEM_FAULT_REQUEST_CONFLICT = 3'b011;
 
   logic [NUM_BANKS-1:0]              a_we, b_we;
   logic [NUM_BANKS-1:0][BANK_AW-1:0] a_addr, b_addr;
@@ -122,6 +139,8 @@ module poly_mem_wrapper_4bank #(
   always_comb begin
     rd_conflict = 1'b0;
     wr_conflict = 1'b0;
+    rw_same_addr_conflict = 1'b0;
+    ww_same_addr_conflict = 1'b0;
     any_rd      = 1'b0;
     any_wr      = 1'b0;
 
@@ -135,14 +154,49 @@ module poly_mem_wrapper_4bank #(
         if (rd_lane_valid_i[ii] && rd_lane_valid_i[jj] && (rd_bank[ii] == rd_bank[jj]))
           rd_conflict = 1'b1;
 
+        if (wr_en_i[ii] && wr_en_i[jj] &&
+            (wr_bank[ii] == wr_bank[jj]) &&
+            (wr_baddr[ii] == wr_baddr[jj]))
+          ww_same_addr_conflict = 1'b1;
+
         if (wr_en_i[ii] && wr_en_i[jj] && (wr_bank[ii] == wr_bank[jj]))
           wr_conflict = 1'b1;
       end
     end
+
+    if (rd_v_i && wr_v_i) begin
+      for (ii = 0; ii < 4; ii++) begin
+        for (jj = 0; jj < 4; jj++) begin
+          if (rd_lane_valid_i[ii] && wr_en_i[jj] &&
+              (rd_bank[ii] == wr_bank[jj]) &&
+              (rd_baddr[ii] == wr_baddr[jj]))
+            rw_same_addr_conflict = 1'b1;
+        end
+      end
+    end
   end
 
-  assign rd_ready_o = ~rd_conflict;
-  assign wr_ready_o = ~wr_conflict;
+  assign plane_conflict = rd_conflict | wr_conflict;
+  assign fault_detected = rw_same_addr_conflict | ww_same_addr_conflict | plane_conflict;
+
+  always_comb begin
+    fault_o      = 1'b0;
+    fault_code_o = MEM_FAULT_NONE;
+
+    if ((rd_v_i || wr_v_i) && fault_detected) begin
+      fault_o = 1'b1;
+
+      if (rw_same_addr_conflict)
+        fault_code_o = MEM_FAULT_RW_SAME_ADDR;
+      else if (ww_same_addr_conflict)
+        fault_code_o = MEM_FAULT_WW_SAME_ADDR;
+      else
+        fault_code_o = MEM_FAULT_REQUEST_CONFLICT;
+    end
+  end
+
+  assign rd_ready_o = ~(rd_conflict | rw_same_addr_conflict);
+  assign wr_ready_o = ~(wr_conflict | rw_same_addr_conflict);
   assign rd_fire    = rd_v_i && rd_ready_o;
   assign wr_fire    = wr_v_i && wr_ready_o;
 

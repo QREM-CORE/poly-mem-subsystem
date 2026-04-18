@@ -12,7 +12,9 @@ module poly_mem_tb;
   localparam int SEED_AW    = $clog2(SEED_DEPTH);
 
   logic clk, rst;
-  logic wipe_i, wipe_done_o;
+  logic wipe_i, wipe_busy_o, wipe_done_o;
+  logic mem_fault_o;
+  logic [2:0] mem_fault_code_o;
 
   logic                           pau_req;
   logic                           pau_rd_en;
@@ -88,7 +90,10 @@ module poly_mem_tb;
     .clk(clk),
     .rst(rst),
     .wipe_i(wipe_i),
+    .wipe_busy_o(wipe_busy_o),
     .wipe_done_o(wipe_done_o),
+    .mem_fault_o(mem_fault_o),
+    .mem_fault_code_o(mem_fault_code_o),
     .pau_req(pau_req),
     .pau_rd_en(pau_rd_en),
     .pau_rd_poly_id(pau_rd_poly_id),
@@ -268,8 +273,12 @@ module poly_mem_tb;
     wipe_i = 1'b1;
     tick();
     wipe_i = 1'b0;
+    if (!wipe_busy_o)
+      $fatal(1, "Expected wipe_busy_o to assert during wipe");
     wait (wipe_done_o == 1'b1);
     tick();
+    if (wipe_busy_o)
+      $fatal(1, "Expected wipe_busy_o to drop after wipe completion");
 
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;

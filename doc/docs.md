@@ -24,6 +24,25 @@ Hardware acceleration of ML-KEM requires issuing multiple coefficient reads and 
 
 A single-port RAM would force every operation to serialize, creating an unacceptable throughput bottleneck. This subsystem solves the problem with a **4-bank dual-port polynomial memory** combined with **conflict-free memory interface (CMI) bank mapping** derived from the NTT butterfly addressing pattern.
 
+## v0.75 Implementation Note
+
+The current implementation has a few important rules that supersede older
+single-front-end descriptions:
+
+- `poly_mem_subsystem.sv` is the authoritative top-level memory module.
+- Polynomial arbitration is **one read owner + one write owner per cycle**.
+- If any client presents a combined read+write request, that client owns both
+  planes atomically for the cycle.
+- The seed / protocol store is a **dedicated dual-port resource** with one
+  HSU-side port and one Transcoder-side port.
+- `cmi.sv` is PAU-owned and no longer lives in this repository.
+- Memory now exposes small **internal-only** status signals to the Main
+  Controller:
+  - `wipe_busy_o`
+  - `wipe_done_o`
+  - `mem_fault_o`
+  - `mem_fault_code_o[2:0]`
+
 ---
 
 # 2. Design Goals
@@ -84,7 +103,10 @@ The Memory Subsystem matches the reference architecture from the IEEE OJCAS 2025
 | **HSU** (Hash Sampling Unit) | Mid | Writes sampled coefficients via Poly Stream Writer |
 | **Transcoder** | Lowest | ByteEncode/Decode, Compress/Decompress — sequential polynomial read/write |
 
-All three clients share the same 4-lane vector interface. The arbiter grants exactly one client per cycle; the others are stalled.
+All three clients share the same 4-lane vector interface. The subsystem grants
+exactly one **read owner** and one **write owner** per cycle. If a client
+requests both in the same cycle, it owns both planes atomically and lower
+priority clients stall.
 
 ---
 
@@ -176,24 +198,35 @@ This is the top-level module. It integrates:
 
 ### Interface
 
-Each client (PAU, HSU, Transcoder) has an identical set of signals:
+Each client (PAU, HSU, Transcoder) has an identical set of stable external
+signals:
 
 | Signal | Direction | Width | Description |
 |--------|-----------|-------|-------------|
 | `*_req` | in | 1 | Request valid |
-| `*_poly_id` | in | 5 | Polynomial slot selector |
 | `*_rd_en` | in | 1 | Read enable |
+| `*_rd_poly_id` | in | 5 | Read polynomial slot selector |
 | `*_rd_idx` | in | 4×8 | Read coefficient indices (4 lanes) |
 | `*_rd_lane_valid` | in | 4 | Per-lane read valid |
 | `*_wr_en` | in | 4 | Per-lane write enable |
+| `*_wr_poly_id` | in | 5 | Write polynomial slot selector |
 | `*_wr_idx` | in | 4×8 | Write coefficient indices |
 | `*_wr_data` | in | 4×16 | Write data |
 | `*_rd_valid` | out | 1 | Read response valid |
-| `*_rd_poly_id` | out | 5 | Read response polynomial ID |
+| `*_rd_poly_id_o` | out | 5 | Read response polynomial ID |
 | `*_rd_idx_o` | out | 4×8 | Read response indices |
 | `*_rd_lane_valid_o` | out | 4 | Read response lane valids |
 | `*_rd_data` | out | 4×16 | Read data |
 | `*_stall` | out | 1 | Client must hold request |
+
+Memory also exposes an internal-only status sideband:
+
+| Signal | Direction | Width | Description |
+|--------|-----------|-------|-------------|
+| `wipe_busy_o` | out | 1 | Wipe FSM is actively zeroizing memory |
+| `wipe_done_o` | out | 1 | Single-cycle wipe completion pulse |
+| `mem_fault_o` | out | 1 | Illegal memory hazard detected |
+| `mem_fault_code_o` | out | 3 | Encoded fault cause |
 
 ### Security Wipe FSM
 
@@ -201,10 +234,10 @@ Each client (PAU, HSU, Transcoder) has an identical set of signals:
 |-------|--------|
 | `WIPE_IDLE` | Normal operation; transition on `wipe_i` pulse |
 | `WIPE_POLY` | Write zero to all 32 polynomials × 64 rows. 4 coefficients per cycle (conflict-free under CMI). All clients stalled. |
-| `WIPE_SEED` | Write zero to all 16 seed locations |
+| `WIPE_SEED` | Write zero to all 32 seed/protocol locations |
 | `WIPE_DONE` | Assert `wipe_done_o` for one cycle, return to `WIPE_IDLE` |
 
-Total wipe latency: `32 × 64 + 16 + 1 = 2065 cycles`.
+Total wipe latency: `32 × 64 + 32 + 1 = 2081 cycles`.
 
 ---
 
@@ -238,7 +271,10 @@ This module implements Poly Port A (read path) and Poly Port B (write path) to t
 
 ### Conflict Detection
 
-Read-vs-write to the same bank is **not** a conflict because reads use Port A and writes use Port B of the dual-port RAM. Only read-read or write-write same-bank collisions cause `ready_o = 0`.
+Read-vs-write to the same bank is **not** automatically a conflict because
+reads use Port A and writes use Port B of the dual-port RAM. However,
+**same-address read+write in the same cycle is explicitly forbidden** and
+raises a memory fault. Same-address write+write is also forbidden.
 
 ### Timing
 
@@ -264,12 +300,16 @@ Single dual-port RAM block. Each bank instance stores `NUM_POLYS × 64` entries 
 
 **Author:** Mavra Muzmmal
 
-Simple synchronous RAM for storing seed values, hash state, and protocol metadata.
+Lightweight true-dual-port RAM for storing seed values, hash state, and
+protocol metadata.
 
-- **Depth:** 16 entries (configurable)
+- **Depth:** 32 entries (configurable)
 - **Width:** 64 bits
 - **Read latency:** 1 cycle
-- Independent from polynomial memory arbitration (own request port on `poly_mem_subsystem`)
+- **Two ports:** one HSU-side, one Transcoder-side
+- Independent from polynomial memory arbitration
+- Physical storage remains address-based, but bridge-facing seed/protocol
+  access is now documented as **ID + beat**
 
 ---
 
@@ -281,18 +321,43 @@ Parameterized shift register used inside the CMI module to align writeback indic
 
 ---
 
-## 6.7 `cmi.sv` — Conflict-Free Memory Interface (PAU Component)
+## 6.7 Seed / Protocol ID + Beat Contract
 
-**Author:** Mai Komar
+At the bridge boundary above Memory, seed / protocol values should be addressed
+as:
 
-**Note:** This module belongs to the PAU, not the Memory Subsystem. It is included in this repository to define the interface contract between the PAU and `poly_mem_wrapper_4bank`.
+- `seed_id`
+- `seed_idx` (beat offset)
 
-### Responsibilities
+The physical seed RAM still stores plain 64-bit words at base-address regions
+defined in `qrem_seed_map_pkg.sv`. A bridge converts:
 
-- Forward 4-lane read requests (coefficient indices + valid flags) to the memory wrapper
-- Consume the wrapper's 1-cycle read response and present aligned data to the Arithmetic Unit
-- Align writeback indices via configurable delay pipelines so write addresses arrive at the wrapper at the same time as AU result data
-- Allow write-only cycles for drain/final writeback phases
+`seed_addr = seed_base(seed_id) + seed_idx`
+
+This keeps Memory simple while letting HSU / Transcoder / controller logic work
+with semantic IDs such as:
+
+- `SEED_ID_D`
+- `SEED_ID_Z`
+- `SEED_ID_M`
+- `SEED_ID_RHO`
+- `SEED_ID_SIGMA`
+- `SEED_ID_HEK`
+- `SEED_ID_SS`
+- `SEED_ID_TMP`
+
+Bridge-facing example interface:
+
+| Signal | Meaning |
+|---|---|
+| `seed_req` | Bridge has an active seed/protocol access |
+| `seed_we` | `1` for write, `0` for read |
+| `seed_id` | Semantic object selector |
+| `seed_idx` | Beat offset inside the selected object |
+| `seed_wdata` | 64-bit write data |
+| `seed_ready` | Store can accept the request |
+| `seed_rvalid` | Read response valid |
+| `seed_rdata` | 64-bit read response data |
 
 ---
 
@@ -337,10 +402,9 @@ make run_mem_frontend_top_tb SIM=verilator
 
 | Testbench | What it verifies |
 |-----------|-----------------|
-| `poly_mem_tb` | PAU-only smoke test: vector write/read, seed store, security wipe |
-| `mem_frontend_top_tb` | Full integration: PAU vector write/read, HSU→Transcoder cross-client, arbitration + isolation, seed store, security wipe |
-| `poly_mem_wrapper_4bank_tb` | Wrapper-level: CMI bank mapping, conflict detection, read response reorder |
-| `cmi_tb` | CMI adapter: read forwarding, writeback delay alignment |
+| `poly_mem_tb` | Polynomial-memory subsystem smoke test: vector write/read, seed store, security wipe |
+| `mem_frontend_top_tb` | Full integration: PAU/HSU/Transcoder overlap, arbitration, faulting hazards, seed store, security wipe |
+| `poly_mem_wrapper_4bank_tb` | Wrapper-level: CMI bank mapping, conflict detection, same-address hazard checks, read response reorder |
 | `mem_arbiter_tb` | Arbiter-level: priority ordering, stall propagation |
 | `seed_ram_tb` | Seed RAM: write/read, address sweep |
 
@@ -355,7 +419,6 @@ poly-mem-subsystem/
 ├── rtl/
 │   ├── qrem_mem_map_pkg.sv        # Polynomial slot address map
 │   ├── delay_n.sv                 # Generic shift register
-│   ├── cmi.sv                     # PAU conflict-free memory interface
 │   ├── mem_arbiter.sv             # Priority arbiter
 │   ├── poly_ram_bank.sv           # Dual-port RAM primitive
 │   ├── seed_ram.sv                # Seed / protocol store
@@ -365,7 +428,6 @@ poly-mem-subsystem/
 │   ├── poly_mem_tb.sv
 │   ├── mem_frontend_top_tb.sv
 │   ├── poly_mem_wrapper_4bank_tb.sv
-│   ├── cmi_tb.sv
 │   ├── mem_arbiter_tb.sv
 │   └── seed_ram_tb.sv
 ├── doc/
@@ -383,10 +445,12 @@ poly-mem-subsystem/
 The QREM polynomial memory subsystem provides:
 
 - **4-bank dual-port polynomial memory** with CMI conflict-free bank mapping
-- **Priority arbitration** (PAU > HSU > Transcoder) granting one client per cycle
+- **Split-plane arbitration** (PAU > HSU > Transcoder) granting one read owner
+  and one write owner per cycle, with atomic combined requests
 - **1-cycle read latency** with tagged response routing to the correct client
-- **Dedicated seed / protocol store** on an independent port
-- **Security wipe FSM** clearing all polynomial and seed memory in ~2065 cycles
+- **Dedicated dual-port seed / protocol store** on independent HSU and
+  Transcoder ports
+- **Security wipe FSM** clearing all polynomial and seed memory in ~2081 cycles
 - **32-polynomial capacity** organized via `qrem_mem_map_pkg`
 
 The architecture follows the Memory Subsystem design described in *"Highly-Efficient Hardware Architecture for ML-KEM PQC Standard"* (IEEE OJCAS 2025).

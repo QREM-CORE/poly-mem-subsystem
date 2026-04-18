@@ -78,8 +78,8 @@ four-coefficient parallel access per cycle using a four-bank dual-port
 memory architecture with conflict-free memory interface (CMI) bank
 mapping. A centralized priority arbiter multiplexes three system
 clients---the Polynomial Arithmetic Unit (PAU), Hash Sampling Unit (HSU),
-and Transcoder---onto the shared memory plane, while a dedicated seed
-store and a security-wipe finite state machine complete the design. The
+and Transcoder---onto the shared memory plane, while a dedicated dual-port
+seed/protocol store and a security-wipe finite state machine complete the design. The
 architecture follows the Memory Subsystem block described in
 \emph{``Highly-Efficient Hardware Architecture for ML-KEM PQC Standard''}
 by H.~Jung, Q.~D.~Truong, and H.~Lee (IEEE OJCAS, 2025).
@@ -207,7 +207,7 @@ encapsulates all memory resources and arbitration logic.
 
 % Seed RAM
 \node[block, fill=purple!10, minimum width=2.5cm, right=1cm of b3]
-  (seed) {seed\_ram\\64b $\times$ 16};
+  (seed) {seed\_ram\\64b $\times$ 32};
 
 % Wipe FSM
 \node[block, fill=red!8, minimum width=2.5cm, below=0.3cm of seed]
@@ -382,12 +382,13 @@ Its responsibilities are:
     to \texttt{seed\_ram}, unaffected by polynomial arbitration.
   \item \textbf{Security wipe FSM:} Sequences through WIPE\_POLY
     (zeroes all 32 polynomials $\times$ 64 rows), WIPE\_SEED (zeroes
-    all 16 seed locations), and WIPE\_DONE.
+    all 32 seed/protocol locations), and WIPE\_DONE.
 \end{enumerate}
 
 \subsubsection{Per-Client Interface}
 
-Every client port presents an identical set of signals (Table~\ref{tab:client_if}).
+Every polynomial-memory client port presents an identical set of signals
+(Table~\ref{tab:client_if}).
 
 \begin{table}[H]
 \centering
@@ -398,14 +399,16 @@ Every client port presents an identical set of signals (Table~\ref{tab:client_if
 \textbf{Signal} & \textbf{Dir} & \textbf{Width} & \textbf{Description} \\
 \midrule
 \texttt{*\_req}            & in  & 1        & Request valid \\
-\texttt{*\_poly\_id}       & in  & 5        & Polynomial slot selector \\
 \texttt{*\_rd\_en}         & in  & 1        & Read enable \\
+\texttt{*\_rd\_poly\_id}   & in  & 5        & Read polynomial slot selector \\
 \texttt{*\_rd\_idx}        & in  & $4\times8$ & Read coefficient indices \\
 \texttt{*\_rd\_lane\_valid} & in & 4        & Per-lane read valid \\
 \texttt{*\_wr\_en}         & in  & 4        & Per-lane write enable \\
+\texttt{*\_wr\_poly\_id}   & in  & 5        & Write polynomial slot selector \\
 \texttt{*\_wr\_idx}        & in  & $4\times8$ & Write coefficient indices \\
 \texttt{*\_wr\_data}       & in  & $4\times16$ & Write data \\
 \texttt{*\_rd\_valid}      & out & 1        & Read response valid (1 cycle later) \\
+\texttt{*\_rd\_poly\_id\_o} & out & 5       & Returned polynomial ID for accepted read \\
 \texttt{*\_rd\_data}       & out & $4\times16$ & Read data \\
 \texttt{*\_stall}          & out & 1        & Client must hold its request \\
 \bottomrule
@@ -425,7 +428,7 @@ Every client port presents an identical set of signals (Table~\ref{tab:client_if
 \texttt{WIPE\_IDLE} & Normal operation; transitions on \texttt{wipe\_i} pulse \\
 \texttt{WIPE\_POLY} & Writes zero to all $32 \times 64 = 2048$ rows
                        (4 coefficients per cycle, conflict-free) \\
-\texttt{WIPE\_SEED} & Writes zero to all 16 seed entries \\
+\texttt{WIPE\_SEED} & Writes zero to all 32 seed/protocol entries \\
 \texttt{WIPE\_DONE} & Asserts \texttt{wipe\_done\_o}; returns to IDLE \\
 \bottomrule
 \end{tabular}
@@ -433,7 +436,7 @@ Every client port presents an identical set of signals (Table~\ref{tab:client_if
 
 Total wipe latency:
 \begin{equation}
-  T_{\text{wipe}} = 32 \times 64 + 16 + 1 = 2065 \text{ cycles}
+  T_{\text{wipe}} = 32 \times 64 + 32 + 1 = 2081 \text{ cycles}
 \end{equation}
 
 During wipe, all client requests are gated and stalled. The wipe writes
@@ -510,12 +513,25 @@ A simple synchronous RAM for storing cryptographic seeds, hash state,
 and protocol metadata.
 
 \begin{itemize}
-  \item Default: 16~entries $\times$ 64~bits.
+  \item Default: 32~entries $\times$ 64~bits.
   \item 1-cycle read latency (synchronous read).
-  \item Independent request port on \texttt{poly\_mem\_subsystem}; not
-    subject to PAU/HSU/Transcoder arbitration.
+  \item True dual-port organization with one HSU-side access port and one
+    Transcoder-side access port.
+  \item Independent from polynomial-memory arbitration.
   \item Zeroed by the wipe FSM during the \texttt{WIPE\_SEED} phase.
 \end{itemize}
+
+At the bridge boundary above Memory, seed/protocol accesses are best
+described as \texttt{seed\_id + seed\_idx} (beat offset). The physical Seed
+Store remains address-based; a bridge computes:
+
+\begin{equation}
+  \texttt{seed\_addr} = \texttt{seed\_base\_addr(seed\_id)} + \texttt{seed\_idx}
+\end{equation}
+
+This keeps the RAM implementation simple while allowing bridge logic to work
+with semantic objects such as \texttt{SEED\_ID\_RHO},
+\texttt{SEED\_ID\_SIGMA}, and \texttt{SEED\_ID\_HEK}.
 
 % ────────────────────────────────────────────────────────────
 \subsection{\texttt{delay\_n} --- Generic Delay Line}
@@ -530,8 +546,8 @@ latencies of different PAU operations (NTT butterfly, CWM, ADD drain).
 Component)}
 
 \textbf{Note:} This module belongs to the PAU, not the Memory Subsystem.
-It is included in the repository to define the interface contract between
-the PAU and \texttt{poly\_mem\_wrapper\_4bank}.
+The authoritative copy now lives with the PAU RTL, while Memory exposes the
+stable subsystem-facing PAU client contract.
 
 \begin{itemize}
   \item Forwards 4-lane read requests (coefficient indices $+$ valid
@@ -605,8 +621,12 @@ When a conflict is detected:
   \item The client must hold its request until \texttt{stall} is released.
 \end{itemize}
 
-Read-vs-write to the same bank is \textbf{not} a conflict because reads
-use Port~A and writes use Port~B of the dual-port RAM.
+Read-vs-write to the same bank is \textbf{not} automatically a conflict because
+reads use Port~A and writes use Port~B of the dual-port RAM. However,
+\textbf{same-address read+write is explicitly forbidden} in the current
+v0.75-alignment pass, and same-address write+write is also forbidden. These
+conditions raise \texttt{mem\_fault\_o} with an encoded
+\texttt{mem\_fault\_code\_o}.
 
 % ════════════════════════════════════════════════════════════════
 \section{Security Wipe}
@@ -622,7 +642,7 @@ key material after use. The wipe FSM provides a hardware-level guarantee:
     CMI mapping, consecutive groups of~4 indices always land in distinct
     banks, so no write conflict occurs and \texttt{ready\_o} remains
     high throughout.
-  \item \textbf{WIPE\_SEED:} The FSM zeroes all 16 seed RAM locations.
+  \item \textbf{WIPE\_SEED:} The FSM zeroes all 32 seed RAM locations.
   \item \textbf{WIPE\_DONE:} Asserts \texttt{wipe\_done\_o} for one cycle
     and returns to idle.
   \item All client requests are gated (forced stall) for the entire
@@ -659,8 +679,6 @@ make run_mem_frontend_top_tb SIM=verilator
   & Full integration: all 3 clients, arbitration, isolation, wipe \\
 \texttt{poly\_mem\_wrapper\_4bank\_tb}
   & CMI mapping, conflict detection, read reorder \\
-\texttt{cmi\_tb}
-  & Read forwarding, writeback delay alignment \\
 \texttt{mem\_arbiter\_tb}
   & Priority ordering, stall propagation \\
 \texttt{seed\_ram\_tb}
@@ -680,7 +698,6 @@ poly-mem-subsystem/
   rtl/
     qrem_mem_map_pkg.sv
     delay_n.sv
-    cmi.sv
     mem_arbiter.sv
     poly_ram_bank.sv
     seed_ram.sv
@@ -690,7 +707,6 @@ poly-mem-subsystem/
     poly_mem_tb.sv
     mem_frontend_top_tb.sv
     poly_mem_wrapper_4bank_tb.sv
-    cmi_tb.sv
     mem_arbiter_tb.sv
     seed_ram_tb.sv
   doc/
@@ -712,13 +728,15 @@ The QREM polynomial memory subsystem provides:
   \item A \textbf{four-bank dual-port polynomial memory} with CMI
     conflict-free bank mapping ensuring zero-conflict NTT butterfly
     access.
-  \item A \textbf{strict-priority arbiter} (PAU~$>$~HSU~$>$~Transcoder)
-    granting exactly one client per cycle with stall-based flow control.
+  \item A \textbf{strict-priority split-plane arbiter} (PAU~$>$~HSU~$>$~Transcoder)
+    granting one read owner and one write owner per cycle, with atomic
+    combined read+write ownership.
   \item \textbf{Deterministic 1-cycle read latency} with tagged response
     routing that guarantees each client only receives its own read data.
-  \item A \textbf{dedicated seed/protocol store} on an independent port.
+  \item A \textbf{dedicated dual-port seed/protocol store} on independent
+    HSU and Transcoder ports.
   \item A \textbf{hardware security-wipe FSM} clearing all 32~polynomials
-    and 16~seed locations in approximately 2065~cycles.
+    and 32~seed/protocol locations in approximately 2081~cycles.
   \item \textbf{32-polynomial capacity} organized via a configurable
     address map supporting ML-KEM-512/768/1024 parameter sets.
 \end{itemize}

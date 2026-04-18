@@ -105,7 +105,7 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \texttt{u\_poly\_mem/G\_BANK[1]} & \texttt{poly\_ram\_bank} & 16\,b & 2048 & Poly Bank~1 \\
 \texttt{u\_poly\_mem/G\_BANK[2]} & \texttt{poly\_ram\_bank} & 16\,b & 2048 & Poly Bank~2 \\
 \texttt{u\_poly\_mem/G\_BANK[3]} & \texttt{poly\_ram\_bank} & 16\,b & 2048 & Poly Bank~3 \\
-\texttt{u\_seed\_ram}             & \texttt{seed\_ram}      & 64\,b & 16   & Seed \& Protocol Store \\
+\texttt{u\_seed\_ram}             & \texttt{seed\_ram}      & 64\,b & 32   & Seed \& Protocol Store \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -114,8 +114,8 @@ The memory subsystem contains exactly \textbf{five RAM instances}
   \item Each \textbf{polynomial bank} is a dual-port RAM: Port~A is used
     for reads, Port~B for writes. This allows a simultaneous read and
     write to the same bank in one cycle.
-  \item The \textbf{seed RAM} is a single-port synchronous RAM with a
-    shared read/write address.
+  \item The \textbf{seed RAM} is a lightweight true-dual-port synchronous
+    RAM with one HSU-side access port and one Transcoder-side access port.
 \end{itemize}
 
 % ════════════════════════════════════════════════════════════════
@@ -145,7 +145,7 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \node[client, fill=orange!15] (pau) {PAU\\(via CMI)};
 \node[client, fill=yellow!15, right=1.5cm of pau] (hsu) {HSU\\(Poly Writer)};
 \node[client, fill=green!12, right=1.5cm of hsu] (tr) {Transcoder};
-\node[client, fill=blue!10, right=1.5cm of tr] (ext) {External\\(Seed User)};
+\node[client, fill=blue!10, right=1.5cm of tr] (ext) {HSU / TR\\Seed Bridge};
 
 % Arbiter
 \node[logic, fill=red!8, minimum width=5cm, below=1.0cm of hsu] (arb)
@@ -170,7 +170,7 @@ The memory subsystem contains exactly \textbf{five RAM instances}
   {Response Router (rd\_owner tag)};
 
 % Seed RAM
-\node[seed, below=0.8cm of wrap, xshift=4.5cm] (sram) {seed\_ram\\64b $\times$ 16};
+\node[seed, below=0.8cm of wrap, xshift=4.5cm] (sram) {seed\_ram\\64b $\times$ 32};
 
 % Seed mux
 \node[logic, fill=purple!6, above=0.4cm of sram, minimum width=2.2cm,
@@ -222,7 +222,8 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \caption{Connection topology. Solid arrows show the request path;
 dashed arrows show read-response return and wipe override paths.
 All three clients share the same 4 polynomial banks through the
-arbiter. The seed RAM has a separate, un-arbitrated port.}
+arbiter. The seed RAM sits on a separate dual-port path and is not
+arbitrated with polynomial traffic.}
 \label{fig:phy}
 \end{figure}
 
@@ -230,13 +231,14 @@ arbiter. The seed RAM has a separate, un-arbitrated port.}
 
 There is \textbf{no per-client bank partitioning}. All three
 clients---PAU, HSU, and Transcoder---share all four polynomial banks
-through a single arbitrated path. The arbiter grants exactly one client
-per cycle; the winner's request is routed through the \emph{same}
+through a single arbitrated path. The subsystem grants one
+\textbf{read owner} and one \textbf{write owner} per cycle; the winner's
+request is routed through the \emph{same}
 \texttt{poly\_mem\_wrapper\_4bank} instance, which applies the same CMI
 bank-mapping function regardless of which client is requesting.
 
-The seed RAM is on a \textbf{completely separate port} that bypasses
-the polynomial arbiter entirely.
+The seed RAM is on a \textbf{completely separate dual-port path} that
+bypasses the polynomial arbiter entirely.
 
 % ════════════════════════════════════════════════════════════════
 \section{How a Request Reaches the Banks}
@@ -544,8 +546,8 @@ operation.
 \midrule
 Module   & \texttt{seed\_ram} \\
 Width    & 64 bits \\
-Depth    & 16 entries \\
-Ports    & Single read/write \\
+Depth    & 32 entries \\
+Ports    & True dual-port (HSU + Transcoder) \\
 Latency  & 1 cycle (synchronous read) \\
 \bottomrule
 \end{tabular}
@@ -553,26 +555,29 @@ Latency  & 1 cycle (synchronous read) \\
 
 \subsection{Connection Path}
 
-The seed RAM has its \textbf{own independent port} on
+The seed RAM has two independent physical ports on
 \texttt{poly\_mem\_subsystem}:
 
 \begin{itemize}
-  \item \texttt{seed\_req} / \texttt{seed\_we} / \texttt{seed\_addr} /
-    \texttt{seed\_wdata} (inputs)
-  \item \texttt{seed\_ready} / \texttt{seed\_rvalid} /
-    \texttt{seed\_rdata} (outputs)
+  \item HSU-side: \texttt{hsu\_seed\_req}, \texttt{hsu\_seed\_we},
+    \texttt{hsu\_seed\_addr}, \texttt{hsu\_seed\_wdata},
+    \texttt{hsu\_seed\_ready}, \texttt{hsu\_seed\_rvalid},
+    \texttt{hsu\_seed\_rdata}
+  \item Transcoder-side: \texttt{tr\_seed\_req}, \texttt{tr\_seed\_we},
+    \texttt{tr\_seed\_addr}, \texttt{tr\_seed\_wdata},
+    \texttt{tr\_seed\_ready}, \texttt{tr\_seed\_rvalid},
+    \texttt{tr\_seed\_rdata}
 \end{itemize}
 
-This port is \textbf{completely independent} of the PAU/HSU/Transcoder
-arbiter. It can be used \emph{concurrently} with a polynomial bank
-access---an HSU hash operation can read the seed RAM at the same time
-the PAU is performing an NTT butterfly on the polynomial banks.
+These ports are \textbf{completely independent} of the PAU/HSU/Transcoder
+polynomial arbiter. They can be used \emph{concurrently} with polynomial-bank
+traffic.
 
 \subsection{Who Drives the Seed Port?}
 
-The memory subsystem does not enforce a specific owner. The seed port
-is a passive interface; the system-level integration decides which
-module connects to it. In the QREM architecture:
+The memory subsystem does not enforce semantic ownership. The physical seed
+ports are passive RAM interfaces; the system-level integration decides how
+bridges and the Main Controller use them. In the QREM architecture:
 
 \begin{table}[H]
 \centering
@@ -586,6 +591,9 @@ module connects to it. In the QREM architecture:
   Reads the 256-bit seed ($\sigma$ or $\rho$) from the seed RAM and
   feeds it to the SHAKE/SHA3 core for hash-based sampling. This is the
   primary seed consumer. \\
+\textbf{Transcoder} &
+  Reads or writes protocol values such as $H(ek)$, shared-secret staging,
+  or temporary metadata through its dedicated seed-side port. \\
 \textbf{System Controller} &
   Writes the initial seed value (from the random number generator or
   received key material) into the seed RAM at the start of each
@@ -593,6 +601,26 @@ module connects to it. In the QREM architecture:
 \bottomrule
 \end{tabular}
 \end{table}
+
+\subsection{Bridge-Facing Seed ID + Beat Contract}
+
+Above Memory, the cleaner abstraction is:
+
+\begin{itemize}
+  \item \texttt{seed\_id}: semantic object selector such as
+    \texttt{SEED\_ID\_RHO}, \texttt{SEED\_ID\_SIGMA}, or
+    \texttt{SEED\_ID\_HEK}
+  \item \texttt{seed\_idx}: beat offset inside the selected object
+\end{itemize}
+
+The physical Seed Store remains address-based. A bridge computes:
+
+\[
+  \texttt{seed\_addr = seed\_base\_addr(seed\_id) + seed\_idx}
+\]
+
+This keeps Memory simple while reducing magic-address burden on HSU and
+Transcoder designers.
 
 \subsection{Seed RAM vs.\ Polynomial Banks: Key Differences}
 
@@ -606,8 +634,8 @@ module connects to it. In the QREM architecture:
 \midrule
 Module       & \texttt{poly\_ram\_bank}     & \texttt{seed\_ram} \\
 Width        & 16 bits                       & 64 bits \\
-Depth        & 2048 entries each             & 16 entries \\
-Ports        & Dual-port (A=read, B=write)   & Single-port (shared R/W) \\
+Depth        & 2048 entries each             & 32 entries \\
+Ports        & Dual-port (A=read, B=write)   & Dual-port (HSU + Transcoder) \\
 Bank mapping & CMI bit-pair-sum              & Direct address \\
 Arbitrated   & Yes (PAU$>$HSU$>$Transcoder)  & No (independent port) \\
 Data stored  & Polynomial coefficients       & Seeds, hash state,
@@ -625,7 +653,7 @@ When the security wipe FSM reaches the \texttt{WIPE\_SEED} state:
   \item The wipe FSM overrides \texttt{seed\_we\_mux},
     \texttt{seed\_addr\_mux}, and \texttt{seed\_wdata\_mux} with
     internally generated zero-write commands.
-  \item It iterates through all 16~addresses, writing 64'h0 to each.
+  \item It iterates through all 32~addresses, writing 64'h0 to each.
   \item \texttt{seed\_ready} is deasserted, blocking any external
     access during wipe.
 \end{enumerate}
@@ -652,10 +680,10 @@ their requests off entirely.
   $32 \times 64 = 2048$ \\
 \texttt{WIPE\_SEED} & Seed RAM &
   Single-word write (zero) &
-  16 \\
+  32 \\
 \texttt{WIPE\_DONE} & None & Signal completion & 1 \\
 \midrule
-\multicolumn{3}{@{}l}{\textbf{Total}} & \textbf{2065 cycles} \\
+\multicolumn{3}{@{}l}{\textbf{Total}} & \textbf{2081 cycles} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -683,13 +711,13 @@ Port~B write-enables fire simultaneously with no conflict.
 --- \\
 \textbf{HSU} &
 \multicolumn{4}{c}{R/W via arbiter + Poly Stream Writer (mid priority)} &
-R (independent port) \\
+R/W (dedicated seed-side port) \\
 \textbf{Transcoder} &
 \multicolumn{4}{c}{R/W via arbiter (lowest priority)} &
---- \\
+R/W (dedicated seed-side port) \\
 \textbf{Controller} &
 --- & --- & --- & --- &
-W (initial seed load) \\
+W via seed bridge / internal control path \\
 \textbf{Wipe FSM} &
 \multicolumn{4}{c}{W (zeroes all slots; absolute priority via gating)} &
 W (zeroes all entries) \\
@@ -707,11 +735,12 @@ W (zeroes all entries) \\
     lands in depends solely on the coefficient index, not on which
     client issued the request.
   \item The seed RAM is \textbf{not} part of the polynomial bank array.
-    It is a separate, independent memory on its own port, with no
+    It is a separate, independent dual-port memory with no polynomial-bank
     arbiter involvement.
-  \item Only \textbf{one polynomial-bank transaction} occurs per cycle
-    (enforced by the arbiter). However, a seed RAM access can happen
-    \textbf{concurrently} with a polynomial bank access.
+  \item The polynomial subsystem supports one \textbf{read owner} and one
+    \textbf{write owner} per cycle. A read-only client can therefore overlap
+    with a write-only client, while a combined read+write request owns both
+    planes atomically.
   \item The wipe FSM is the only entity that accesses \textbf{both}
     memory types, and it does so sequentially (polynomial banks first,
     then seed RAM).
