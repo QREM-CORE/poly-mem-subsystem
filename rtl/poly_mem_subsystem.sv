@@ -1,242 +1,1054 @@
-// ================================================================
-// Purpose:
-//   This module acts as the memory controller/subsystem for polynomial
-//   storage. It connects multiple clients (NTT, PolyMul, Pack/Unpack)
-//   to multiple RAM banks.
-//
-// Main idea:
-//   - There are NUM_BANKS memory banks.
-//   - Each bank is a dual-port RAM:
-//       Port A = shared by NTT / PolyMul write / Pack-Unpack
-//       Port B = used by PolyMul reads
-//   - Arbitration logic decides who gets access when multiple blocks
-//     want the same bank/port at the same time.
-//
-// Important:
-//   RAM reads are synchronous, so read data comes with 1-cycle latency.
-// ================================================================
+/*
+ * Module Name: poly_mem_subsystem
+ * Author(s): Mavra Muzmmal, Quardin Lyttle, Salwan Aldhahab
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
+ * Description:
+ *   Top-level polynomial / seed memory subsystem for QREM Core v0.9.
+ *
+ * Key architectural rules implemented here:
+ *   - Strict client priority remains PAU > HSU > Transcoder.
+ *   - Polynomial memory schedules onto two internal generic ports, allowing
+ *     two legal operations per cycle when hazards permit.
+ *   - PAU may own both internal ports atomically through its primary and
+ *     auxiliary descriptors.
+ *   - HSU polynomial access is write-oriented except for the constrained
+ *     KG_HSU_HASH_EK T-slot read path authorized by hsu_hash_ek_read_en.
+ *   - The seed / protocol store remains independent from polynomial
+ *     arbitration and exposes one dedicated HSU-side port and one dedicated
+ *     Transcoder-side port.
+ *
+ * Notes:
+ *   - Reset is active-high and synchronous.
+ *   - During wipe, all polynomial clients stall and both seed ports report
+ *     not-ready.
+ *   - Memory exposes a small internal-only control/status sideband for the
+ *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
+ */
+
+import qrem_mem_map_pkg::*;
+import qrem_seed_map_pkg::*;
+
 module poly_mem_subsystem #(
-  parameter int NUM_BANKS = 4,        // Number of memory banks
-  parameter int N         = 256,      // Depth of each bank (number of words)
-  parameter int W         = 16,       // Data width of each word
-  parameter int ADDR_W    = $clog2(N) // Address width needed for N locations
+  parameter int NUM_POLYS  = 32,
+  parameter int NCOEFF     = 256,
+  parameter int W          = 16,
+  parameter int SEED_DEPTH = QREM_SEED_DEPTH,
+  parameter int SEED_W     = QREM_SEED_W
 )(
-  input  logic clk,                   // System clock
-  input  logic rst_n,                 // Active-low reset
+  input  logic clk,
+  input  logic rst,
 
-  // ==============================================================
-  // NTT interface
-  // Uses Port A of the selected bank
-  // ==============================================================
-  input  logic                         ntt_req,    // NTT requests access
-  input  logic [$clog2(NUM_BANKS)-1:0] ntt_bank,   // Which bank NTT wants
-  input  logic                         ntt_we,     // Write enable: 1=write, 0=read
-  input  logic [ADDR_W-1:0]            ntt_addr,   // Address inside selected bank
-  input  logic [W-1:0]                 ntt_wdata,  // Data to write from NTT
-  output logic [W-1:0]                 ntt_rdata,  // Data read back to NTT
-  output logic                         ntt_stall,  // Stall signal for NTT (currently not heavily used)
+  // --------------------------------------------------------------------------
+  // Security wipe
+  // --------------------------------------------------------------------------
+  input  logic wipe_i,
+  output logic wipe_busy_o,
+  output logic wipe_done_o,
+  output logic mem_fault_o,
+  output logic [2:0] mem_fault_code_o,
 
-  // ==============================================================
-  // PolyMul interface
-  // - Reads use Port B
-  // - Writes use Port A
-  // ==============================================================
-  input  logic                         pm_req,      // PolyMul requests access
+  // ==========================================================================
+  // PAU polynomial-memory interface
+  // ==========================================================================
+  input  logic                               pau_req,
+  input  logic                               pau_rd_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       pau_rd_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx,
+  input  logic [3:0]                         pau_rd_lane_valid,
+  input  logic [3:0]                         pau_wr_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       pau_wr_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_wr_idx,
+  input  logic [3:0][W-1:0]                  pau_wr_data,
+  output logic                               pau_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       pau_rd_poly_id_o,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx_o,
+  output logic [3:0]                         pau_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  pau_rd_data,
+  output logic                               pau_stall,
 
-  // PolyMul read channel 0
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r0,  // Bank for read channel 0
-  input  logic [ADDR_W-1:0]            pm_addr_r0,  // Address for read channel 0
-  output logic [W-1:0]                 pm_rdata_r0, // Read data from channel 0
+  // ========================================================================
+  // PAU auxiliary polynomial-memory descriptor
+  // ==========================================================================
+  input  logic                               pau_aux_req,
+  input  logic                               pau_aux_rd_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       pau_aux_rd_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_aux_rd_idx,
+  input  logic [3:0]                         pau_aux_rd_lane_valid,
+  input  logic [3:0]                         pau_aux_wr_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       pau_aux_wr_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_aux_wr_idx,
+  input  logic [3:0][W-1:0]                  pau_aux_wr_data,
+  output logic                               pau_aux_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       pau_aux_rd_poly_id_o,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     pau_aux_rd_idx_o,
+  output logic [3:0]                         pau_aux_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  pau_aux_rd_data,
 
-  // PolyMul read channel 1
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_r1,  // Bank for read channel 1
-  input  logic [ADDR_W-1:0]            pm_addr_r1,  // Address for read channel 1
-  output logic [W-1:0]                 pm_rdata_r1, // Read data from channel 1
+  // ==========================================================================
+  // HSU KG_HSU_HASH_EK constrained read authorization
+  // ==========================================================================
+  input  logic                               hsu_hash_ek_read_en,
 
-  // PolyMul write channel
-  input  logic [$clog2(NUM_BANKS)-1:0] pm_bank_w,   // Bank for write
-  input  logic                         pm_we,       // Write enable for PolyMul
-  input  logic [ADDR_W-1:0]            pm_addr_w,   // Write address
-  input  logic [W-1:0]                 pm_wdata,    // Data to write
-  output logic                         pm_stall,    // Stall if conflict happens
+  // ==========================================================================
+  // HSU polynomial-memory interface
+  // Writes are used during sampling/matrix-fill. Reads are accepted only for
+  // authorized KG_HSU_HASH_EK T-slot readout into the Gearbox/HSU hash path.
+  // ==========================================================================
+  input  logic                               hsu_req,
+  input  logic                               hsu_rd_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       hsu_rd_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx,
+  input  logic [3:0]                         hsu_rd_lane_valid,
+  input  logic [3:0]                         hsu_wr_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       hsu_wr_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     hsu_wr_idx,
+  input  logic [3:0][W-1:0]                  hsu_wr_data,
+  output logic                               hsu_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       hsu_rd_poly_id_o,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx_o,
+  output logic [3:0]                         hsu_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  hsu_rd_data,
+  output logic                               hsu_stall,
 
-  // ==============================================================
-  // Pack/Unpack interface
-  // Uses Port A of selected bank
-  // ==============================================================
-  input  logic                         pu_req,      // Pack/Unpack request
-  input  logic [$clog2(NUM_BANKS)-1:0] pu_bank,     // Bank selected by Pack/Unpack
-  input  logic                         pu_we,       // Write enable: 1=write, 0=read
-  input  logic [ADDR_W-1:0]            pu_addr,     // Address inside selected bank
-  input  logic [W-1:0]                 pu_wdata,    // Data to write
-  output logic [W-1:0]                 pu_rdata,    // Data read back
-  output logic                         pu_stall     // Stall if conflict happens
+  // ==========================================================================
+  // Transcoder polynomial-memory interface
+  // ==========================================================================
+  input  logic                               tr_req,
+  input  logic                               tr_rd_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       tr_rd_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx,
+  input  logic [3:0]                         tr_rd_lane_valid,
+  input  logic [3:0]                         tr_wr_en,
+  input  logic [$clog2(NUM_POLYS)-1:0]       tr_wr_poly_id,
+  input  logic [3:0][$clog2(NCOEFF)-1:0]     tr_wr_idx,
+  input  logic [3:0][W-1:0]                  tr_wr_data,
+  output logic                               tr_rd_valid,
+  output logic [$clog2(NUM_POLYS)-1:0]       tr_rd_poly_id_o,
+  output logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx_o,
+  output logic [3:0]                         tr_rd_lane_valid_o,
+  output logic [3:0][W-1:0]                  tr_rd_data,
+  output logic                               tr_stall,
+
+  // ==========================================================================
+  // HSU seed / protocol port
+  // ==========================================================================
+  input  logic                               hsu_seed_req,
+  input  logic                               hsu_seed_we,
+  input  logic [$clog2(SEED_DEPTH)-1:0]      hsu_seed_addr,
+  input  logic [SEED_W-1:0]                  hsu_seed_wdata,
+  output logic                               hsu_seed_ready,
+  output logic                               hsu_seed_rvalid,
+  output logic [SEED_W-1:0]                  hsu_seed_rdata,
+
+  // ==========================================================================
+  // Transcoder seed / protocol port
+  // ==========================================================================
+  input  logic                               tr_seed_req,
+  input  logic                               tr_seed_we,
+  input  logic [$clog2(SEED_DEPTH)-1:0]      tr_seed_addr,
+  input  logic [SEED_W-1:0]                  tr_seed_wdata,
+  output logic                               tr_seed_ready,
+  output logic                               tr_seed_rvalid,
+  output logic [SEED_W-1:0]                  tr_seed_rdata
 );
 
-  // ==============================================================
-  // Internal signals to connect arbitration logic to each bank
-  //
-  // For each bank, we keep:
-  //   - write enable for Port A and Port B
-  //   - address for Port A and Port B
-  //   - write data for Port A and Port B
-  //   - read data returned from Port A and Port B
-  // ==============================================================
-  logic [NUM_BANKS-1:0]             bank_a_we, bank_b_we;
-  logic [NUM_BANKS-1:0][ADDR_W-1:0] bank_a_addr, bank_b_addr;
-  logic [NUM_BANKS-1:0][W-1:0]      bank_a_wdata, bank_b_wdata;
-  logic [NUM_BANKS-1:0][W-1:0]      bank_a_rdata, bank_b_rdata;
+  localparam int POLY_W             = $clog2(NUM_POLYS);
+  localparam int COEFF_W            = $clog2(NCOEFF);
+  localparam int ROWS_PER_POLY_BANK = NCOEFF / 4;
+  localparam int ROW_W              = $clog2(ROWS_PER_POLY_BANK);
+  localparam int SEED_AW            = $clog2(SEED_DEPTH);
+  localparam int BANK_AW            = $clog2(NUM_POLYS * ROWS_PER_POLY_BANK);
 
-  // ==============================================================
-  // Instantiate NUM_BANKS copies of poly_ram_bank
-  //
-  // Each bank is dual-port:
-  //   Port A -> shared by NTT / PolyMul write / Pack-Unpack
-  //   Port B -> used for PolyMul reads
-  // ==============================================================
-  genvar i;
-  generate
-    for (i=0; i<NUM_BANKS; i++) begin : G_BANKS
-      poly_ram_bank #(.N(N), .W(W), .ADDR_W(ADDR_W)) u_bank (
-        .clk(clk),
-        .rst_n(rst_n),
+  typedef enum logic [2:0] {
+    OWNER_NONE    = 3'd0,
+    OWNER_PAU     = 3'd1,
+    OWNER_PAU_AUX = 3'd2,
+    OWNER_HSU     = 3'd3,
+    OWNER_TR      = 3'd4
+  } client_owner_e;
 
-        // Port A connections
-        .a_we(bank_a_we[i]),
-        .a_addr(bank_a_addr[i]),
-        .a_wdata(bank_a_wdata[i]),
-        .a_rdata(bank_a_rdata[i]),
+  typedef enum logic [1:0] {
+    REQ_NONE  = 2'd0,
+    REQ_READ  = 2'd1,
+    REQ_WRITE = 2'd2
+  } req_kind_e;
 
-        // Port B connections
-        .b_we(bank_b_we[i]),
-        .b_addr(bank_b_addr[i]),
-        .b_wdata(bank_b_wdata[i]),
-        .b_rdata(bank_b_rdata[i])
-      );
+  typedef enum logic [1:0] {
+    WIPE_IDLE = 2'd0,
+    WIPE_POLY = 2'd1,
+    WIPE_SEED = 2'd2,
+    WIPE_DONE = 2'd3
+  } wipe_state_e;
+
+  wipe_state_e   wipe_state_q, wipe_state_d;
+  logic [POLY_W-1:0] wipe_poly_q, wipe_poly_d;
+  logic [ROW_W-1:0]  wipe_row_q,  wipe_row_d;
+  logic [SEED_AW-1:0] wipe_seed_q, wipe_seed_d;
+
+  client_owner_e p0_rd_owner_q, p1_rd_owner_q;
+  logic          mem_fault_q;
+  logic [2:0]    mem_fault_code_q;
+
+  logic          poly_fault;
+  logic [2:0]    poly_fault_code;
+
+  // --------------------------------------------------------------------------
+  // Local memory-bank decode helpers used only for scheduling preview.
+  // These mirror the wrapper bank/row mapping; they are not the PAU CMI.
+  // The wrapper remains authoritative for the actual bank/row access.
+  // --------------------------------------------------------------------------
+  function automatic [1:0] mem_bank_idx(
+    input logic [COEFF_W-1:0] order
+  );
+    logic [3:0] sum;
+    begin
+      sum = order[1:0] + order[3:2] + order[5:4] + order[7:6];
+      mem_bank_idx = sum[1:0];
     end
-  endgenerate
+  endfunction
 
-  
-  // ==============================================================
-  // Arbitration / routing logic
-  //
-  // Port A priority:
-  //   1. NTT
-  //   2. PolyMul write
-  //   3. Pack/Unpack
-  //
-  // Port B usage:
-  //   - Only PolyMul reads
-  //
-  // Note:
-  //   RAM reads are synchronous (1-cycle latency), so returned read data
-  //   corresponds to a previously issued address.
-  // ==============================================================
+  function automatic [BANK_AW-1:0] mem_bank_addr(
+    input logic [POLY_W-1:0] pid,
+    input logic [COEFF_W-1:0] order
+  );
+    logic [ROW_W-1:0] row;
+    begin
+      row = order >> 2;
+      mem_bank_addr = pid * ROWS_PER_POLY_BANK + row;
+    end
+  endfunction
+
+  function automatic logic req_has_conflict(
+    input logic [POLY_W-1:0]        poly_id,
+    input logic [3:0][COEFF_W-1:0] idx,
+    input logic [3:0]              lane_mask
+  );
+    logic [3:0][1:0]         bank;
+    integer ii, jj;
+    begin
+      req_has_conflict = 1'b0;
+
+      for (ii = 0; ii < 4; ii++) begin
+        bank[ii] = mem_bank_idx(idx[ii]);
+      end
+
+      for (ii = 0; ii < 4; ii++) begin
+        for (jj = ii + 1; jj < 4; jj++) begin
+          if (lane_mask[ii] && lane_mask[jj] && (bank[ii] == bank[jj]))
+            req_has_conflict = 1'b1;
+        end
+      end
+    end
+  endfunction
+
+  function automatic logic req_pair_legal(
+    input logic                     a_is_wr,
+    input logic [POLY_W-1:0]        a_poly_id,
+    input logic [3:0][COEFF_W-1:0] a_idx,
+    input logic [3:0]              a_lane_mask,
+    input logic                     b_is_wr,
+    input logic [POLY_W-1:0]        b_poly_id,
+    input logic [3:0][COEFF_W-1:0] b_idx,
+    input logic [3:0]              b_lane_mask
+  );
+    logic [3:0][1:0]         a_bank, b_bank;
+    logic [3:0][BANK_AW-1:0] a_baddr, b_baddr;
+    integer ii, jj;
+    begin
+      req_pair_legal = 1'b1;
+
+      if (!a_is_wr && !b_is_wr) begin
+        req_pair_legal = 1'b1;
+      end else begin
+        for (ii = 0; ii < 4; ii++) begin
+          a_bank[ii]  = mem_bank_idx(a_idx[ii]);
+          a_baddr[ii] = mem_bank_addr(a_poly_id, a_idx[ii]);
+          b_bank[ii]  = mem_bank_idx(b_idx[ii]);
+          b_baddr[ii] = mem_bank_addr(b_poly_id, b_idx[ii]);
+        end
+
+        for (ii = 0; ii < 4; ii++) begin
+          for (jj = 0; jj < 4; jj++) begin
+            if (a_lane_mask[ii] && b_lane_mask[jj] &&
+                (a_bank[ii] == b_bank[jj]) &&
+                (a_baddr[ii] == b_baddr[jj]) &&
+                (a_is_wr || b_is_wr))
+              req_pair_legal = 1'b0;
+          end
+        end
+      end
+    end
+  endfunction
+
+  // --------------------------------------------------------------------------
+  // Per-client request classification
+  // --------------------------------------------------------------------------
+  logic pau_rd_req, pau_wr_req, pau_both_req, pau_single_req;
+  logic pau_aux_active, pau_aux_rd_req, pau_aux_wr_req, pau_aux_both_req;
+  logic pau_pri_op_req, pau_aux_op_req, pau_dual_req, pau_dual_valid;
+  logic hsu_rd_req, hsu_wr_req, hsu_both_req, hsu_single_req;
+  logic hsu_rd_t_slot_req, hsu_rd_allowed_req;
+  logic tr_rd_req, tr_wr_req, tr_both_req, tr_single_req;
+  logic hsu_poly_rd_unsupported;
+
+  assign pau_aux_active = pau_req && pau_aux_req;
+  assign pau_rd_req    = pau_req && pau_rd_en && (|pau_rd_lane_valid);
+  assign pau_wr_req    = pau_req && (|pau_wr_en);
+  assign pau_both_req  = pau_rd_req && pau_wr_req;
+  assign pau_pri_op_req = pau_rd_req || pau_wr_req;
+
+  assign pau_aux_rd_req   = pau_aux_active && pau_aux_rd_en && (|pau_aux_rd_lane_valid);
+  assign pau_aux_wr_req   = pau_aux_active && (|pau_aux_wr_en);
+  assign pau_aux_both_req = pau_aux_rd_req && pau_aux_wr_req;
+  assign pau_aux_op_req   = pau_aux_rd_req || pau_aux_wr_req;
+
+  assign pau_dual_req     = pau_aux_active;
+  assign pau_dual_valid   = pau_dual_req && pau_pri_op_req && pau_aux_op_req &&
+                            ~pau_both_req && ~pau_aux_both_req;
+  assign pau_single_req   = ~pau_aux_active && pau_pri_op_req && ~pau_both_req;
+
+  // HSU remains write-oriented during sampling/matrix-fill. The only legal
+  // polynomial read exception is KG_HSU_HASH_EK, where a Gearbox bridge reads
+  // final t_hat slots T0..T3 for ByteEncode12 into the HSU hash path.
+  assign hsu_rd_req = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
+  assign hsu_wr_req = hsu_req && (|hsu_wr_en);
+  assign hsu_both_req = hsu_rd_req && hsu_wr_req;
+  assign hsu_rd_t_slot_req = (hsu_rd_poly_id == POLY_W'(POLY_ID_T0)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T1)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T2)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T3));
+  assign hsu_rd_allowed_req = hsu_rd_req && hsu_hash_ek_read_en &&
+                              hsu_rd_t_slot_req && !hsu_wr_req;
+  assign hsu_poly_rd_unsupported = hsu_rd_req && !hsu_rd_allowed_req;
+  assign hsu_single_req = (hsu_wr_req || hsu_rd_allowed_req) && !hsu_both_req;
+
+  assign tr_rd_req     = tr_req && tr_rd_en && (|tr_rd_lane_valid);
+  assign tr_wr_req     = tr_req && (|tr_wr_en);
+  assign tr_both_req   = tr_rd_req && tr_wr_req;
+  assign tr_single_req = (tr_rd_req || tr_wr_req) && ~tr_both_req;
+
+  logic wipe_active;
+  logic [COEFF_W-1:0] wipe_base_idx;
+  assign wipe_active     = (wipe_state_q != WIPE_IDLE);
+  assign wipe_base_idx   = COEFF_W'({wipe_row_q, 2'b00});
+  assign wipe_busy_o     = wipe_active;
+  assign mem_fault_o     = mem_fault_q;
+  assign mem_fault_code_o = mem_fault_code_q;
+
+  // --------------------------------------------------------------------------
+  // Combined-owner detection
+  // --------------------------------------------------------------------------
+  logic combo_pau, combo_tr, combo_any;
+  client_owner_e combo_owner;
+
+  assign combo_pau = ~wipe_active && ~pau_aux_active && pau_both_req;
+  assign combo_tr  = ~combo_pau && ~pau_dual_req && ~wipe_active && tr_both_req;
+  assign combo_any = combo_pau || combo_tr;
+
   always_comb begin
-    // ------------------------------------------------------------
-    // Default assignments
-    // Start by clearing everything so no unintended latches or
-    // leftover values occur.
-    // ------------------------------------------------------------
-    bank_a_we    = '0;
-    bank_b_we    = '0;
-    bank_a_addr  = '0;
-    bank_b_addr  = '0;
-    bank_a_wdata = '0;
-    bank_b_wdata = '0;
+    combo_owner = OWNER_NONE;
+    if (combo_pau) combo_owner = OWNER_PAU;
+    else if (combo_tr) combo_owner = OWNER_TR;
+  end
 
-    ntt_rdata   = '0;
-    ntt_stall   = 1'b0;
+  // --------------------------------------------------------------------------
+  // Normalized one-sided request views used by the 2-port scheduler
+  // --------------------------------------------------------------------------
+  logic        pau_is_wr_req, pau_aux_is_wr_req, hsu_is_wr_req, tr_is_wr_req;
+  logic [POLY_W-1:0]        pau_poly_id_req, pau_aux_poly_id_req;
+  logic [POLY_W-1:0]        hsu_poly_id_req, tr_poly_id_req;
+  logic [3:0][COEFF_W-1:0] pau_idx_req, pau_aux_idx_req;
+  logic [3:0][COEFF_W-1:0] hsu_idx_req, tr_idx_req;
+  logic [3:0]              pau_lane_mask_req, pau_aux_lane_mask_req;
+  logic [3:0]              hsu_lane_mask_req, tr_lane_mask_req;
+  logic [3:0][W-1:0]       pau_data_req, pau_aux_data_req;
+  logic [3:0][W-1:0]       hsu_data_req, tr_data_req;
+  logic                    pau_conflict_req, pau_aux_conflict_req;
+  logic                    hsu_conflict_req, tr_conflict_req;
+  logic                    pau_dual_pair_legal, pau_dual_can_issue;
 
-    pm_rdata_r0 = '0;
-    pm_rdata_r1 = '0;
-    pm_stall    = 1'b0;
+  assign pau_is_wr_req       = pau_wr_req;
+  assign pau_aux_is_wr_req   = pau_aux_wr_req;
+  assign hsu_is_wr_req       = hsu_wr_req;
+  assign tr_is_wr_req        = tr_wr_req;
 
-    pu_rdata    = '0;
-    pu_stall    = 1'b0;
+  assign pau_poly_id_req     = pau_wr_req ? pau_wr_poly_id : pau_rd_poly_id;
+  assign pau_aux_poly_id_req = pau_aux_wr_req ? pau_aux_wr_poly_id : pau_aux_rd_poly_id;
+  assign hsu_poly_id_req     = hsu_wr_req ? hsu_wr_poly_id : hsu_rd_poly_id;
+  assign tr_poly_id_req      = tr_wr_req  ? tr_wr_poly_id  : tr_rd_poly_id;
 
-    // ------------------------------------------------------------
-    // PORT A: NTT access
-    // Highest priority on Port A
-    //
-    // If NTT requests access:
-    //   - send its address to selected bank
-    //   - send write enable
-    //   - send write data
-    //   - return read data from that bank
-    // ------------------------------------------------------------
-    if (ntt_req) begin
-      bank_a_addr[ntt_bank]  = ntt_addr;
-      bank_a_we[ntt_bank]    = ntt_we;
-      bank_a_wdata[ntt_bank] = ntt_wdata;
-      ntt_rdata              = bank_a_rdata[ntt_bank];
-    end
+  assign pau_idx_req         = pau_wr_req ? pau_wr_idx : pau_rd_idx;
+  assign pau_aux_idx_req     = pau_aux_wr_req ? pau_aux_wr_idx : pau_aux_rd_idx;
+  assign hsu_idx_req         = hsu_wr_req ? hsu_wr_idx : hsu_rd_idx;
+  assign tr_idx_req          = tr_wr_req  ? tr_wr_idx  : tr_rd_idx;
 
-    // ------------------------------------------------------------
-    // PORT A: PolyMul write
-    // Lower priority than NTT
-    //
-    // If PolyMul wants to write:
-    //   - it can use Port A only if NTT is NOT using the same bank
-    //   - if same bank conflict happens, PolyMul is stalled
-    // ------------------------------------------------------------
-    if (pm_req) begin
-      if (!(ntt_req && (ntt_bank == pm_bank_w))) begin
-        bank_a_addr[pm_bank_w]  = pm_addr_w;
-        bank_a_we[pm_bank_w]    = pm_we;
-        bank_a_wdata[pm_bank_w] = pm_wdata;
-      end else begin
-        pm_stall = 1'b1;
+  assign pau_lane_mask_req   = pau_wr_req ? pau_wr_en :
+                               (pau_rd_req ? pau_rd_lane_valid : '0);
+  assign pau_aux_lane_mask_req = pau_aux_wr_req ? pau_aux_wr_en :
+                                 (pau_aux_rd_req ? pau_aux_rd_lane_valid : '0);
+  assign hsu_lane_mask_req   = hsu_wr_req ? hsu_wr_en :
+                               (hsu_rd_allowed_req ? hsu_rd_lane_valid : '0);
+  assign tr_lane_mask_req    = tr_wr_req  ? tr_wr_en  : tr_rd_lane_valid;
+
+  assign pau_data_req        = pau_wr_data;
+  assign pau_aux_data_req    = pau_aux_wr_data;
+  assign hsu_data_req        = hsu_wr_data;
+  assign tr_data_req         = tr_wr_data;
+
+  assign pau_conflict_req    = req_has_conflict(pau_poly_id_req, pau_idx_req, pau_lane_mask_req);
+  assign pau_aux_conflict_req = req_has_conflict(pau_aux_poly_id_req, pau_aux_idx_req,
+                                                 pau_aux_lane_mask_req);
+  assign hsu_conflict_req    = req_has_conflict(hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req);
+  assign tr_conflict_req     = req_has_conflict(tr_poly_id_req,  tr_idx_req,  tr_lane_mask_req);
+  assign pau_dual_pair_legal = req_pair_legal(
+                                 pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
+                                 pau_aux_is_wr_req, pau_aux_poly_id_req, pau_aux_idx_req,
+                                 pau_aux_lane_mask_req
+                               );
+  assign pau_dual_can_issue  = pau_dual_valid && !pau_conflict_req &&
+                               !pau_aux_conflict_req && pau_dual_pair_legal;
+
+  // --------------------------------------------------------------------------
+  // Deterministic 2-port request scheduler
+  // --------------------------------------------------------------------------
+  client_owner_e p0_sel_owner, p1_sel_owner;
+  req_kind_e     p0_sel_kind,  p1_sel_kind;
+  logic [POLY_W-1:0]        p0_sel_poly_id, p1_sel_poly_id;
+  logic [3:0][COEFF_W-1:0] p0_sel_idx,     p1_sel_idx;
+  logic [3:0]              p0_sel_lane_mask, p1_sel_lane_mask;
+  logic [3:0][W-1:0]       p0_sel_data,    p1_sel_data;
+  logic                    p0_sel_conflict;
+
+  always_comb begin
+    p0_sel_owner     = OWNER_NONE;
+    p0_sel_kind      = REQ_NONE;
+    p0_sel_poly_id   = '0;
+    p0_sel_idx       = '0;
+    p0_sel_lane_mask = '0;
+    p0_sel_data      = '0;
+    p0_sel_conflict  = 1'b0;
+
+    p1_sel_owner     = OWNER_NONE;
+    p1_sel_kind      = REQ_NONE;
+    p1_sel_poly_id   = '0;
+    p1_sel_idx       = '0;
+    p1_sel_lane_mask = '0;
+    p1_sel_data      = '0;
+
+    if (!wipe_active && pau_dual_can_issue) begin
+      p0_sel_owner     = OWNER_PAU;
+      if (pau_is_wr_req)
+        p0_sel_kind = REQ_WRITE;
+      else
+        p0_sel_kind = REQ_READ;
+      p0_sel_poly_id   = pau_poly_id_req;
+      p0_sel_idx       = pau_idx_req;
+      p0_sel_lane_mask = pau_lane_mask_req;
+      p0_sel_data      = pau_data_req;
+      p0_sel_conflict  = pau_conflict_req;
+
+      p1_sel_owner     = OWNER_PAU_AUX;
+      if (pau_aux_is_wr_req)
+        p1_sel_kind = REQ_WRITE;
+      else
+        p1_sel_kind = REQ_READ;
+      p1_sel_poly_id   = pau_aux_poly_id_req;
+      p1_sel_idx       = pau_aux_idx_req;
+      p1_sel_lane_mask = pau_aux_lane_mask_req;
+      p1_sel_data      = pau_aux_data_req;
+    end else if (!wipe_active && !combo_any && !pau_dual_req) begin
+      if (pau_single_req) begin
+        p0_sel_owner     = OWNER_PAU;
+        if (pau_is_wr_req)
+          p0_sel_kind = REQ_WRITE;
+        else
+          p0_sel_kind = REQ_READ;
+        p0_sel_poly_id   = pau_poly_id_req;
+        p0_sel_idx       = pau_idx_req;
+        p0_sel_lane_mask = pau_lane_mask_req;
+        p0_sel_data      = pau_data_req;
+        p0_sel_conflict  = pau_conflict_req;
+      end else if (hsu_single_req) begin
+        p0_sel_owner     = OWNER_HSU;
+        if (hsu_is_wr_req)
+          p0_sel_kind = REQ_WRITE;
+        else
+          p0_sel_kind = REQ_READ;
+        p0_sel_poly_id   = hsu_poly_id_req;
+        p0_sel_idx       = hsu_idx_req;
+        p0_sel_lane_mask = hsu_lane_mask_req;
+        p0_sel_data      = hsu_data_req;
+        p0_sel_conflict  = hsu_conflict_req;
+      end else if (tr_single_req) begin
+        p0_sel_owner     = OWNER_TR;
+        if (tr_is_wr_req)
+          p0_sel_kind = REQ_WRITE;
+        else
+          p0_sel_kind = REQ_READ;
+        p0_sel_poly_id   = tr_poly_id_req;
+        p0_sel_idx       = tr_idx_req;
+        p0_sel_lane_mask = tr_lane_mask_req;
+        p0_sel_data      = tr_data_req;
+        p0_sel_conflict  = tr_conflict_req;
+      end
+
+      if ((p0_sel_owner != OWNER_NONE) && !p0_sel_conflict) begin
+        if ((p0_sel_owner != OWNER_PAU) && pau_single_req && !pau_conflict_req &&
+            req_pair_legal(
+              (p0_sel_kind == REQ_WRITE), p0_sel_poly_id, p0_sel_idx, p0_sel_lane_mask,
+              pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req
+            )) begin
+          p1_sel_owner     = OWNER_PAU;
+          if (pau_is_wr_req)
+            p1_sel_kind = REQ_WRITE;
+          else
+            p1_sel_kind = REQ_READ;
+          p1_sel_poly_id   = pau_poly_id_req;
+          p1_sel_idx       = pau_idx_req;
+          p1_sel_lane_mask = pau_lane_mask_req;
+          p1_sel_data      = pau_data_req;
+        end else if ((p0_sel_owner != OWNER_HSU) && hsu_single_req && !hsu_conflict_req &&
+                     req_pair_legal(
+                       (p0_sel_kind == REQ_WRITE), p0_sel_poly_id, p0_sel_idx, p0_sel_lane_mask,
+                       hsu_is_wr_req, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
+                     )) begin
+          p1_sel_owner     = OWNER_HSU;
+          if (hsu_is_wr_req)
+            p1_sel_kind = REQ_WRITE;
+          else
+            p1_sel_kind = REQ_READ;
+          p1_sel_poly_id   = hsu_poly_id_req;
+          p1_sel_idx       = hsu_idx_req;
+          p1_sel_lane_mask = hsu_lane_mask_req;
+          p1_sel_data      = hsu_data_req;
+        end else if ((p0_sel_owner != OWNER_TR) && tr_single_req && !tr_conflict_req &&
+                     req_pair_legal(
+                       (p0_sel_kind == REQ_WRITE), p0_sel_poly_id, p0_sel_idx, p0_sel_lane_mask,
+                       tr_is_wr_req, tr_poly_id_req, tr_idx_req, tr_lane_mask_req
+                     )) begin
+          p1_sel_owner     = OWNER_TR;
+          if (tr_is_wr_req)
+            p1_sel_kind = REQ_WRITE;
+          else
+            p1_sel_kind = REQ_READ;
+          p1_sel_poly_id   = tr_poly_id_req;
+          p1_sel_idx       = tr_idx_req;
+          p1_sel_lane_mask = tr_lane_mask_req;
+          p1_sel_data      = tr_data_req;
+        end
       end
     end
+  end
 
-    // ------------------------------------------------------------
-    // PORT A: Pack/Unpack access
-    // Lowest priority on Port A
-    //
-    // Pack/Unpack can use Port A only if:
-    //   - NTT is not using the same bank
-    //   - PolyMul write is not using the same bank
-    //
-    // Otherwise Pack/Unpack is stalled.
-    // ------------------------------------------------------------
-    if (pu_req) begin
-      if (!(ntt_req && (ntt_bank == pu_bank)) &&
-          !(pm_req  && (pm_bank_w == pu_bank))) begin
-        bank_a_addr[pu_bank]  = pu_addr;
-        bank_a_we[pu_bank]    = pu_we;
-        bank_a_wdata[pu_bank] = pu_wdata;
-        pu_rdata              = bank_a_rdata[pu_bank];
-      end else begin
-        pu_stall = 1'b1;
+  // --------------------------------------------------------------------------
+  // Muxed generic wrapper ports
+  // --------------------------------------------------------------------------
+  logic [POLY_W-1:0]        p0_poly_id_mux, p1_poly_id_mux;
+  logic                     p0_v_mux,       p1_v_mux;
+  logic [3:0]               p0_wr_en_mux,   p1_wr_en_mux;
+  logic [3:0][COEFF_W-1:0] p0_idx_mux,     p1_idx_mux;
+  logic [3:0]               p0_lane_valid_mux, p1_lane_valid_mux;
+  logic [3:0][W-1:0]        p0_data_mux,    p1_data_mux;
+
+  client_owner_e            p0_read_owner_sel, p1_read_owner_sel;
+
+  always_comb begin
+    p0_poly_id_mux    = '0;
+    p0_v_mux          = 1'b0;
+    p0_wr_en_mux      = '0;
+    p0_idx_mux        = '0;
+    p0_lane_valid_mux = '0;
+    p0_data_mux       = '0;
+
+    p1_poly_id_mux    = '0;
+    p1_v_mux          = 1'b0;
+    p1_wr_en_mux      = '0;
+    p1_idx_mux        = '0;
+    p1_lane_valid_mux = '0;
+    p1_data_mux       = '0;
+
+    p0_read_owner_sel = OWNER_NONE;
+    p1_read_owner_sel = OWNER_NONE;
+
+    if (wipe_state_q == WIPE_POLY) begin
+      p0_poly_id_mux    = wipe_poly_q;
+      p0_v_mux          = 1'b1;
+      p0_wr_en_mux      = 4'b1111;
+      p0_idx_mux[0]     = wipe_base_idx + COEFF_W'(0);
+      p0_idx_mux[1]     = wipe_base_idx + COEFF_W'(1);
+      p0_idx_mux[2]     = wipe_base_idx + COEFF_W'(2);
+      p0_idx_mux[3]     = wipe_base_idx + COEFF_W'(3);
+      p0_data_mux       = '0;
+    end else if (combo_any) begin
+      p0_v_mux          = 1'b1;
+      p1_v_mux          = 1'b1;
+      p0_read_owner_sel = combo_owner;
+
+      unique case (combo_owner)
+        OWNER_PAU: begin
+          p0_poly_id_mux    = pau_rd_poly_id;
+          p0_idx_mux        = pau_rd_idx;
+          p0_lane_valid_mux = pau_rd_lane_valid;
+          p1_poly_id_mux    = pau_wr_poly_id;
+          p1_wr_en_mux      = pau_wr_en;
+          p1_idx_mux        = pau_wr_idx;
+          p1_data_mux       = pau_wr_data;
+        end
+        OWNER_TR: begin
+          p0_poly_id_mux    = tr_rd_poly_id;
+          p0_idx_mux        = tr_rd_idx;
+          p0_lane_valid_mux = tr_rd_lane_valid;
+          p1_poly_id_mux    = tr_wr_poly_id;
+          p1_wr_en_mux      = tr_wr_en;
+          p1_idx_mux        = tr_wr_idx;
+          p1_data_mux       = tr_wr_data;
+        end
+        default: begin
+        end
+      endcase
+    end else begin
+      unique case (p0_sel_owner)
+        OWNER_PAU: begin
+          p0_poly_id_mux = p0_sel_poly_id;
+          p0_idx_mux     = p0_sel_idx;
+          p0_v_mux       = 1'b1;
+          if (p0_sel_kind == REQ_READ) begin
+            p0_lane_valid_mux = p0_sel_lane_mask;
+            p0_read_owner_sel = OWNER_PAU;
+          end else if (p0_sel_kind == REQ_WRITE) begin
+            p0_wr_en_mux = p0_sel_lane_mask;
+            p0_data_mux  = p0_sel_data;
+          end
+        end
+        OWNER_PAU_AUX: begin
+          p0_poly_id_mux = p0_sel_poly_id;
+          p0_idx_mux     = p0_sel_idx;
+          p0_v_mux       = 1'b1;
+          if (p0_sel_kind == REQ_READ) begin
+            p0_lane_valid_mux = p0_sel_lane_mask;
+            p0_read_owner_sel = OWNER_PAU_AUX;
+          end else if (p0_sel_kind == REQ_WRITE) begin
+            p0_wr_en_mux = p0_sel_lane_mask;
+            p0_data_mux  = p0_sel_data;
+          end
+        end
+        OWNER_HSU: begin
+          p0_poly_id_mux = p0_sel_poly_id;
+          p0_idx_mux     = p0_sel_idx;
+          p0_v_mux       = 1'b1;
+          if (p0_sel_kind == REQ_READ) begin
+            p0_lane_valid_mux = p0_sel_lane_mask;
+            p0_read_owner_sel = OWNER_HSU;
+          end else if (p0_sel_kind == REQ_WRITE) begin
+            p0_wr_en_mux = p0_sel_lane_mask;
+            p0_data_mux  = p0_sel_data;
+          end
+        end
+        OWNER_TR: begin
+          p0_poly_id_mux = p0_sel_poly_id;
+          p0_idx_mux     = p0_sel_idx;
+          p0_v_mux       = 1'b1;
+          if (p0_sel_kind == REQ_READ) begin
+            p0_lane_valid_mux = p0_sel_lane_mask;
+            p0_read_owner_sel = OWNER_TR;
+          end else if (p0_sel_kind == REQ_WRITE) begin
+            p0_wr_en_mux = p0_sel_lane_mask;
+            p0_data_mux  = p0_sel_data;
+          end
+        end
+        default: begin
+        end
+      endcase
+
+      unique case (p1_sel_owner)
+        OWNER_PAU: begin
+          p1_poly_id_mux = p1_sel_poly_id;
+          p1_idx_mux     = p1_sel_idx;
+          p1_v_mux       = 1'b1;
+          if (p1_sel_kind == REQ_READ) begin
+            p1_lane_valid_mux = p1_sel_lane_mask;
+            p1_read_owner_sel = OWNER_PAU;
+          end else if (p1_sel_kind == REQ_WRITE) begin
+            p1_wr_en_mux = p1_sel_lane_mask;
+            p1_data_mux  = p1_sel_data;
+          end
+        end
+        OWNER_PAU_AUX: begin
+          p1_poly_id_mux = p1_sel_poly_id;
+          p1_idx_mux     = p1_sel_idx;
+          p1_v_mux       = 1'b1;
+          if (p1_sel_kind == REQ_READ) begin
+            p1_lane_valid_mux = p1_sel_lane_mask;
+            p1_read_owner_sel = OWNER_PAU_AUX;
+          end else if (p1_sel_kind == REQ_WRITE) begin
+            p1_wr_en_mux = p1_sel_lane_mask;
+            p1_data_mux  = p1_sel_data;
+          end
+        end
+        OWNER_HSU: begin
+          p1_poly_id_mux = p1_sel_poly_id;
+          p1_idx_mux     = p1_sel_idx;
+          p1_v_mux       = 1'b1;
+          if (p1_sel_kind == REQ_READ) begin
+            p1_lane_valid_mux = p1_sel_lane_mask;
+            p1_read_owner_sel = OWNER_HSU;
+          end else if (p1_sel_kind == REQ_WRITE) begin
+            p1_wr_en_mux = p1_sel_lane_mask;
+            p1_data_mux  = p1_sel_data;
+          end
+        end
+        OWNER_TR: begin
+          p1_poly_id_mux = p1_sel_poly_id;
+          p1_idx_mux     = p1_sel_idx;
+          p1_v_mux       = 1'b1;
+          if (p1_sel_kind == REQ_READ) begin
+            p1_lane_valid_mux = p1_sel_lane_mask;
+            p1_read_owner_sel = OWNER_TR;
+          end else if (p1_sel_kind == REQ_WRITE) begin
+            p1_wr_en_mux = p1_sel_lane_mask;
+            p1_data_mux  = p1_sel_data;
+          end
+        end
+        default: begin
+        end
+      endcase
+    end
+  end
+
+  logic p0_ready, p1_ready;
+  logic p0_rd_valid_int, p1_rd_valid_int;
+  logic [POLY_W-1:0]        p0_rd_poly_id_int, p1_rd_poly_id_int;
+  logic [3:0][COEFF_W-1:0] p0_rd_idx_int,     p1_rd_idx_int;
+  logic [3:0]               p0_rd_lane_valid_int, p1_rd_lane_valid_int;
+  logic [3:0][W-1:0]        p0_rd_data_int,    p1_rd_data_int;
+
+  poly_mem_wrapper_4bank #(
+    .N         (NCOEFF),
+    .W         (W),
+    .NUM_POLYS (NUM_POLYS)
+  ) u_poly_mem (
+    .clk             (clk),
+    .rst             (rst),
+    .p0_poly_id_i    (p0_poly_id_mux),
+    .p0_v_i          (p0_v_mux),
+    .p0_wr_en_i      (p0_wr_en_mux),
+    .p0_idx_i        (p0_idx_mux),
+    .p0_lane_valid_i (p0_lane_valid_mux),
+    .p0_data_i       (p0_data_mux),
+    .p0_ready_o      (p0_ready),
+    .p0_rd_valid_o   (p0_rd_valid_int),
+    .p0_rd_poly_id_o (p0_rd_poly_id_int),
+    .p0_rd_idx_o     (p0_rd_idx_int),
+    .p0_rd_lane_valid_o(p0_rd_lane_valid_int),
+    .p0_rd_data_o    (p0_rd_data_int),
+    .p1_poly_id_i    (p1_poly_id_mux),
+    .p1_v_i          (p1_v_mux),
+    .p1_wr_en_i      (p1_wr_en_mux),
+    .p1_idx_i        (p1_idx_mux),
+    .p1_lane_valid_i (p1_lane_valid_mux),
+    .p1_data_i       (p1_data_mux),
+    .p1_ready_o      (p1_ready),
+    .p1_rd_valid_o   (p1_rd_valid_int),
+    .p1_rd_poly_id_o (p1_rd_poly_id_int),
+    .p1_rd_idx_o     (p1_rd_idx_int),
+    .p1_rd_lane_valid_o(p1_rd_lane_valid_int),
+    .p1_rd_data_o    (p1_rd_data_int),
+    .fault_o         (poly_fault),
+    .fault_code_o    (poly_fault_code)
+  );
+
+  logic p0_read_fire, p1_read_fire;
+  assign p0_read_fire = p0_v_mux && p0_ready && (|p0_lane_valid_mux) && ~(|p0_wr_en_mux);
+  assign p1_read_fire = p1_v_mux && p1_ready && (|p1_lane_valid_mux) && ~(|p1_wr_en_mux);
+
+  // --------------------------------------------------------------------------
+  // Dual-port seed / protocol store
+  // --------------------------------------------------------------------------
+  logic [SEED_W-1:0] hsu_seed_rdata_int, tr_seed_rdata_int;
+  logic              hsu_seed_read_fire, tr_seed_read_fire;
+  logic              hsu_seed_read_fire_q, tr_seed_read_fire_q;
+
+  logic               seed_a_we_mux, seed_b_we_mux;
+  logic [SEED_AW-1:0] seed_a_addr_mux, seed_b_addr_mux;
+  logic [SEED_W-1:0]  seed_a_wdata_mux, seed_b_wdata_mux;
+
+  always_comb begin
+    seed_a_we_mux    = hsu_seed_we && hsu_seed_req && ~wipe_active;
+    seed_a_addr_mux  = hsu_seed_addr;
+    seed_a_wdata_mux = hsu_seed_wdata;
+
+    seed_b_we_mux    = tr_seed_we && tr_seed_req && ~wipe_active;
+    seed_b_addr_mux  = tr_seed_addr;
+    seed_b_wdata_mux = tr_seed_wdata;
+
+    if (wipe_state_q == WIPE_SEED) begin
+      seed_a_we_mux    = 1'b1;
+      seed_a_addr_mux  = wipe_seed_q;
+      seed_a_wdata_mux = '0;
+
+      seed_b_we_mux    = 1'b0;
+      seed_b_addr_mux  = '0;
+      seed_b_wdata_mux = '0;
+    end
+  end
+
+  assign hsu_seed_ready     = ~wipe_active;
+  assign tr_seed_ready      = ~wipe_active;
+  assign hsu_seed_read_fire = ~wipe_active && hsu_seed_req && ~hsu_seed_we;
+  assign tr_seed_read_fire  = ~wipe_active && tr_seed_req  && ~tr_seed_we;
+
+  seed_ram #(
+    .DEPTH  (SEED_DEPTH),
+    .W      (SEED_W),
+    .ADDR_W (SEED_AW)
+  ) u_seed_ram (
+    .clk    (clk),
+    .rst    (rst),
+    .a_we   (seed_a_we_mux),
+    .a_addr (seed_a_addr_mux),
+    .a_wdata(seed_a_wdata_mux),
+    .a_rdata(hsu_seed_rdata_int),
+    .b_we   (seed_b_we_mux),
+    .b_addr (seed_b_addr_mux),
+    .b_wdata(seed_b_wdata_mux),
+    .b_rdata(tr_seed_rdata_int)
+  );
+
+  assign hsu_seed_rdata  = hsu_seed_rdata_int;
+  assign tr_seed_rdata   = tr_seed_rdata_int;
+  assign hsu_seed_rvalid = hsu_seed_read_fire_q;
+  assign tr_seed_rvalid  = tr_seed_read_fire_q;
+
+  // --------------------------------------------------------------------------
+  // Final stall generation
+  // --------------------------------------------------------------------------
+  logic combo_can_fire;
+  assign combo_can_fire = p0_ready && p1_ready;
+
+  always_comb begin
+    pau_stall = 1'b0;
+    hsu_stall = 1'b0;
+    tr_stall  = 1'b0;
+
+    if (wipe_active) begin
+      pau_stall = pau_req;
+      hsu_stall = hsu_req;
+      tr_stall  = tr_req;
+    end else if (pau_dual_req) begin
+      pau_stall = ~(pau_dual_can_issue && p0_ready && p1_ready);
+      hsu_stall = hsu_req;
+      tr_stall  = tr_req;
+    end else if (combo_any) begin
+      pau_stall = pau_req && (~combo_pau || ~combo_can_fire);
+      hsu_stall = hsu_req;
+      tr_stall  = tr_req  && (~combo_tr  || ~combo_can_fire);
+    end else begin
+      if (pau_single_req) begin
+        if (p0_sel_owner == OWNER_PAU) pau_stall = ~p0_ready;
+        else if (p1_sel_owner == OWNER_PAU) pau_stall = ~p1_ready;
+        else pau_stall = 1'b1;
+      end
+
+      if (hsu_poly_rd_unsupported) begin
+        hsu_stall = 1'b1;
+      end else if (hsu_single_req) begin
+        if (p0_sel_owner == OWNER_HSU) hsu_stall = ~p0_ready;
+        else if (p1_sel_owner == OWNER_HSU) hsu_stall = ~p1_ready;
+        else hsu_stall = 1'b1;
+      end
+
+      if (tr_single_req) begin
+        if (p0_sel_owner == OWNER_TR) tr_stall = ~p0_ready;
+        else if (p1_sel_owner == OWNER_TR) tr_stall = ~p1_ready;
+        else tr_stall = 1'b1;
       end
     end
+  end
 
-    // ------------------------------------------------------------
-    // PORT B: PolyMul reads
-    //
-    // PolyMul has 2 read channels (r0 and r1), but each bank only
-    // has one Port B.
-    //
-    // So:
-    //   - read channel 0 always uses its selected bank on Port B
-    //   - read channel 1 can also proceed only if it uses a different
-    //     bank from read channel 0
-    //   - if both want same bank, only one Port B exists there, so
-    //     conflict occurs and pm_stall is asserted
-    // ------------------------------------------------------------
-    if (pm_req) begin
-      // Read channel 0
-      bank_b_addr[pm_bank_r0] = pm_addr_r0;
-      pm_rdata_r0             = bank_b_rdata[pm_bank_r0];
+  // --------------------------------------------------------------------------
+  // Read response routing
+  // --------------------------------------------------------------------------
+  always_comb begin
+    pau_rd_valid        = 1'b0;
+    pau_rd_poly_id_o    = '0;
+    pau_rd_idx_o        = '0;
+    pau_rd_lane_valid_o = '0;
+    pau_rd_data         = '0;
 
-      // Read channel 1
-      if (pm_bank_r1 != pm_bank_r0) begin
-        bank_b_addr[pm_bank_r1] = pm_addr_r1;
-        pm_rdata_r1             = bank_b_rdata[pm_bank_r1];
-      end else begin
-        pm_stall = 1'b1;
+    pau_aux_rd_valid        = 1'b0;
+    pau_aux_rd_poly_id_o    = '0;
+    pau_aux_rd_idx_o        = '0;
+    pau_aux_rd_lane_valid_o = '0;
+    pau_aux_rd_data         = '0;
+
+    hsu_rd_valid        = 1'b0;
+    hsu_rd_poly_id_o    = '0;
+    hsu_rd_idx_o        = '0;
+    hsu_rd_lane_valid_o = '0;
+    hsu_rd_data         = '0;
+
+    tr_rd_valid         = 1'b0;
+    tr_rd_poly_id_o     = '0;
+    tr_rd_idx_o         = '0;
+    tr_rd_lane_valid_o  = '0;
+    tr_rd_data          = '0;
+
+    if (p0_rd_valid_int) begin
+      unique case (p0_rd_owner_q)
+        OWNER_PAU: begin
+          pau_rd_valid        = 1'b1;
+          pau_rd_poly_id_o    = p0_rd_poly_id_int;
+          pau_rd_idx_o        = p0_rd_idx_int;
+          pau_rd_lane_valid_o = p0_rd_lane_valid_int;
+          pau_rd_data         = p0_rd_data_int;
+        end
+        OWNER_PAU_AUX: begin
+          pau_aux_rd_valid        = 1'b1;
+          pau_aux_rd_poly_id_o    = p0_rd_poly_id_int;
+          pau_aux_rd_idx_o        = p0_rd_idx_int;
+          pau_aux_rd_lane_valid_o = p0_rd_lane_valid_int;
+          pau_aux_rd_data         = p0_rd_data_int;
+        end
+        OWNER_HSU: begin
+          hsu_rd_valid        = 1'b1;
+          hsu_rd_poly_id_o    = p0_rd_poly_id_int;
+          hsu_rd_idx_o        = p0_rd_idx_int;
+          hsu_rd_lane_valid_o = p0_rd_lane_valid_int;
+          hsu_rd_data         = p0_rd_data_int;
+        end
+        OWNER_TR: begin
+          tr_rd_valid         = 1'b1;
+          tr_rd_poly_id_o     = p0_rd_poly_id_int;
+          tr_rd_idx_o         = p0_rd_idx_int;
+          tr_rd_lane_valid_o  = p0_rd_lane_valid_int;
+          tr_rd_data          = p0_rd_data_int;
+        end
+        default: begin
+        end
+      endcase
+    end
+
+    if (p1_rd_valid_int) begin
+      unique case (p1_rd_owner_q)
+        OWNER_PAU: begin
+          pau_rd_valid        = 1'b1;
+          pau_rd_poly_id_o    = p1_rd_poly_id_int;
+          pau_rd_idx_o        = p1_rd_idx_int;
+          pau_rd_lane_valid_o = p1_rd_lane_valid_int;
+          pau_rd_data         = p1_rd_data_int;
+        end
+        OWNER_PAU_AUX: begin
+          pau_aux_rd_valid        = 1'b1;
+          pau_aux_rd_poly_id_o    = p1_rd_poly_id_int;
+          pau_aux_rd_idx_o        = p1_rd_idx_int;
+          pau_aux_rd_lane_valid_o = p1_rd_lane_valid_int;
+          pau_aux_rd_data         = p1_rd_data_int;
+        end
+        OWNER_HSU: begin
+          hsu_rd_valid        = 1'b1;
+          hsu_rd_poly_id_o    = p1_rd_poly_id_int;
+          hsu_rd_idx_o        = p1_rd_idx_int;
+          hsu_rd_lane_valid_o = p1_rd_lane_valid_int;
+          hsu_rd_data         = p1_rd_data_int;
+        end
+        OWNER_TR: begin
+          tr_rd_valid         = 1'b1;
+          tr_rd_poly_id_o     = p1_rd_poly_id_int;
+          tr_rd_idx_o         = p1_rd_idx_int;
+          tr_rd_lane_valid_o  = p1_rd_lane_valid_int;
+          tr_rd_data          = p1_rd_data_int;
+        end
+        default: begin
+        end
+      endcase
+    end
+  end
+
+  // --------------------------------------------------------------------------
+  // Wipe FSM
+  // --------------------------------------------------------------------------
+  always_comb begin
+    wipe_state_d = wipe_state_q;
+    wipe_poly_d  = wipe_poly_q;
+    wipe_row_d   = wipe_row_q;
+    wipe_seed_d  = wipe_seed_q;
+    wipe_done_o  = 1'b0;
+
+    unique case (wipe_state_q)
+      WIPE_IDLE: begin
+        if (wipe_i) begin
+          wipe_state_d = WIPE_POLY;
+          wipe_poly_d  = '0;
+          wipe_row_d   = '0;
+          wipe_seed_d  = '0;
+        end
       end
+
+      WIPE_POLY: begin
+        if (p0_ready) begin
+          if (wipe_row_q == ROWS_PER_POLY_BANK-1) begin
+            wipe_row_d = '0;
+            if (wipe_poly_q == NUM_POLYS-1) begin
+              wipe_poly_d  = '0;
+              wipe_state_d = WIPE_SEED;
+            end else begin
+              wipe_poly_d = wipe_poly_q + 1'b1;
+            end
+          end else begin
+            wipe_row_d = wipe_row_q + 1'b1;
+          end
+        end
+      end
+
+      WIPE_SEED: begin
+        if (wipe_seed_q == SEED_DEPTH-1) begin
+          wipe_seed_d  = '0;
+          wipe_state_d = WIPE_DONE;
+        end else begin
+          wipe_seed_d = wipe_seed_q + 1'b1;
+        end
+      end
+
+      WIPE_DONE: begin
+        wipe_done_o  = 1'b1;
+        wipe_state_d = WIPE_IDLE;
+      end
+
+      default: begin
+        wipe_state_d = WIPE_IDLE;
+      end
+    endcase
+  end
+
+  // --------------------------------------------------------------------------
+  // Sequential state
+  // --------------------------------------------------------------------------
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      wipe_state_q        <= WIPE_IDLE;
+      wipe_poly_q         <= '0;
+      wipe_row_q          <= '0;
+      wipe_seed_q         <= '0;
+      p0_rd_owner_q       <= OWNER_NONE;
+      p1_rd_owner_q       <= OWNER_NONE;
+      hsu_seed_read_fire_q <= 1'b0;
+      tr_seed_read_fire_q  <= 1'b0;
+      mem_fault_q         <= 1'b0;
+      mem_fault_code_q    <= 3'b000;
+    end else begin
+      wipe_state_q        <= wipe_state_d;
+      wipe_poly_q         <= wipe_poly_d;
+      wipe_row_q          <= wipe_row_d;
+      wipe_seed_q         <= wipe_seed_d;
+
+      if (p0_read_fire) p0_rd_owner_q <= p0_read_owner_sel;
+      if (p1_read_fire) p1_rd_owner_q <= p1_read_owner_sel;
+
+      hsu_seed_read_fire_q <= hsu_seed_read_fire;
+      tr_seed_read_fire_q  <= tr_seed_read_fire;
+      mem_fault_q         <= poly_fault;
+      mem_fault_code_q    <= poly_fault ? poly_fault_code : 3'b000;
     end
   end
 

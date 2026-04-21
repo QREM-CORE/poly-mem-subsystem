@@ -1,71 +1,74 @@
-// ===============================================================
-// Description:
-// Simple synchronous RAM used to store seed values.
-// The memory supports one read and one write per clock cycle.
-// If write enable (we) is asserted, data is written to the
-// specified address. The read is synchronous and returns the
-// value stored at the given address.
-//
-// Parameters:
-//   DEPTH   : Number of memory locations
-//   W       : Width of each memory word
-//   ADDR_W  : Width of the address bus (log2 of DEPTH)
-// ===============================================================
+/*
+ * Module Name: seed_ram
+ * Author(s): Mavra Muzmmal, Quardin Lyttle
+ * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
+ *
+ * Description:
+ *   Lightweight true-dual-port seed / protocol store used by the QREM core.
+ *
+ *   v0.85 treats the seed store differently from the polynomial banks:
+ *     - no shared arbiter
+ *     - small fixed-size protocol values
+ *     - concurrent HSU-side and Transcoder-side access
+ *
+ *   This module therefore exposes two independent ports:
+ *     - Port A: intended for the HSU seed bridge
+ *     - Port B: intended for the Transcoder / host-facing seed bridge
+ *
+ * Notes:
+ *   - Reads are synchronous with 1-cycle latency.
+ *   - Reset is active-high and synchronous.
+ *   - Reset clears only the registered read outputs. Memory contents are wiped
+ *     by the top-level wipe FSM, not by reset.
+ */
 
 module seed_ram #(
-  parameter int DEPTH   = 16,                 // Total number of memory entries
-  parameter int W       = 64,                 // Width of each stored word (64 bits)
-  parameter int ADDR_W  = $clog2(DEPTH)       // Address width automatically computed
+  parameter int DEPTH  = 32,
+  parameter int W      = 64,
+  parameter int ADDR_W = $clog2(DEPTH)
 )(
-  // Clock signal (all operations are synchronized to this)
   input  logic              clk,
+  input  logic              rst,
 
-  // Active-low reset (currently unused but kept for system consistency)
-  input  logic              rst_n,
+  // --------------------------------------------------------------------------
+  // Port A (HSU-side seed access)
+  // --------------------------------------------------------------------------
+  input  logic              a_we,
+  input  logic [ADDR_W-1:0] a_addr,
+  input  logic [W-1:0]      a_wdata,
+  output logic [W-1:0]      a_rdata,
 
-  // Write enable signal
-  // When 'we' = 1, data will be written into memory
-  input  logic              we,
-
-  // Address for both read and write operations
-  input  logic [ADDR_W-1:0] addr,
-
-  // Data to be written into memory
-  input  logic [W-1:0]      wdata,
-
-  // Data read from memory
-  output logic [W-1:0]      rdata
+  // --------------------------------------------------------------------------
+  // Port B (Transcoder-side seed access)
+  // --------------------------------------------------------------------------
+  input  logic              b_we,
+  input  logic [ADDR_W-1:0] b_addr,
+  input  logic [W-1:0]      b_wdata,
+  output logic [W-1:0]      b_rdata
 );
 
-  // ===============================================================
-  // Memory Declaration
-  // Creates an array of DEPTH entries, each W bits wide
-  // Example with default parameters:
-  //   16 locations × 64 bits each
-  // ===============================================================
   logic [W-1:0] mem [0:DEPTH-1];
 
-
-  // ===============================================================
-  // Sequential Memory Logic
-  // This block runs on the rising edge of the clock.
-  //
-  // Write Operation:
-  //   If 'we' is asserted, wdata is stored at mem[addr]
-  //
-  // Read Operation:
-  //   rdata always outputs the value stored at mem[addr]
-  //   (Synchronous read with 1 clock cycle latency)
-  // ===============================================================
   always_ff @(posedge clk) begin
+    if (rst) begin
+      a_rdata <= '0;
+    end else begin
+      if (a_we)
+        mem[a_addr] <= a_wdata;
 
-    // Write data into memory when write enable is active
-    if (we)
-      mem[addr] <= wdata;
+      a_rdata <= mem[a_addr];
+    end
+  end
 
-    // Read data from memory
-    rdata <= mem[addr];
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      b_rdata <= '0;
+    end else begin
+      if (b_we)
+        mem[b_addr] <= b_wdata;
 
+      b_rdata <= mem[b_addr];
+    end
   end
 
 endmodule
