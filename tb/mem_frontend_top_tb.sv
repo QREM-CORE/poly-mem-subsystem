@@ -16,6 +16,7 @@ module mem_frontend_top_tb;
   localparam int POLY_W     = $clog2(NUM_POLYS);
   localparam int COEFF_W    = $clog2(NCOEFF);
   localparam int SEED_AW    = $clog2(SEED_DEPTH);
+  localparam int SEED_IDX_W = $clog2(QREM_SEED_BEATS);
 
   logic clk;
   logic rst;
@@ -92,7 +93,8 @@ module mem_frontend_top_tb;
 
   logic                           hsu_seed_req;
   logic                           hsu_seed_we;
-  logic [SEED_AW-1:0]             hsu_seed_addr;
+  seed_id_e                       hsu_seed_id;
+  logic [SEED_IDX_W-1:0]          hsu_seed_idx;
   logic [SEED_W-1:0]              hsu_seed_wdata;
   logic                           hsu_seed_ready;
   logic                           hsu_seed_rvalid;
@@ -100,7 +102,8 @@ module mem_frontend_top_tb;
 
   logic                           tr_seed_req;
   logic                           tr_seed_we;
-  logic [SEED_AW-1:0]             tr_seed_addr;
+  seed_id_e                       tr_seed_id;
+  logic [SEED_IDX_W-1:0]          tr_seed_idx;
   logic [SEED_W-1:0]              tr_seed_wdata;
   logic                           tr_seed_ready;
   logic                           tr_seed_rvalid;
@@ -182,14 +185,16 @@ module mem_frontend_top_tb;
     .tr_stall(tr_stall),
     .hsu_seed_req(hsu_seed_req),
     .hsu_seed_we(hsu_seed_we),
-    .hsu_seed_addr(hsu_seed_addr),
+    .hsu_seed_id(hsu_seed_id),
+    .hsu_seed_idx(hsu_seed_idx),
     .hsu_seed_wdata(hsu_seed_wdata),
     .hsu_seed_ready(hsu_seed_ready),
     .hsu_seed_rvalid(hsu_seed_rvalid),
     .hsu_seed_rdata(hsu_seed_rdata),
     .tr_seed_req(tr_seed_req),
     .tr_seed_we(tr_seed_we),
-    .tr_seed_addr(tr_seed_addr),
+    .tr_seed_id(tr_seed_id),
+    .tr_seed_idx(tr_seed_idx),
     .tr_seed_wdata(tr_seed_wdata),
     .tr_seed_ready(tr_seed_ready),
     .tr_seed_rvalid(tr_seed_rvalid),
@@ -256,11 +261,13 @@ module mem_frontend_top_tb;
     begin
       hsu_seed_req   = 1'b0;
       hsu_seed_we    = 1'b0;
-      hsu_seed_addr  = '0;
+      hsu_seed_id    = SEED_ID_D;
+      hsu_seed_idx   = '0;
       hsu_seed_wdata = '0;
       tr_seed_req    = 1'b0;
       tr_seed_we     = 1'b0;
-      tr_seed_addr   = '0;
+      tr_seed_id     = SEED_ID_D;
+      tr_seed_idx    = '0;
       tr_seed_wdata  = '0;
     end
   endtask
@@ -970,15 +977,17 @@ module mem_frontend_top_tb;
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
 
     // ------------------------------------------------------------------
-    // 17) Seed/protocol store uses semantic ID + beat mapping above Memory.
+    // 17) Seed/protocol store uses semantic ID + beat mapping at Memory.
     // ------------------------------------------------------------------
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
-    hsu_seed_addr  = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd1);
+    hsu_seed_id    = SEED_ID_RHO;
+    hsu_seed_idx   = 2'd1;
     hsu_seed_wdata = 64'h1122_3344_5566_7788;
     tr_seed_req    = 1'b1;
     tr_seed_we     = 1'b1;
-    tr_seed_addr   = qrem_seed_map_pkg::seed_word_addr(SEED_ID_HEK, 2'd2);
+    tr_seed_id     = SEED_ID_HEK;
+    tr_seed_idx    = 2'd2;
     tr_seed_wdata  = 64'h99AA_BBCC_DDEE_FF00;
     #1;
 
@@ -989,9 +998,11 @@ module mem_frontend_top_tb;
     clear_seed_clients();
 
     hsu_seed_req  = 1'b1;
-    hsu_seed_addr = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd1);
+    hsu_seed_id   = SEED_ID_RHO;
+    hsu_seed_idx  = 2'd1;
     tr_seed_req   = 1'b1;
-    tr_seed_addr  = qrem_seed_map_pkg::seed_word_addr(SEED_ID_HEK, 2'd2);
+    tr_seed_id    = SEED_ID_HEK;
+    tr_seed_idx   = 2'd2;
     tick();
     clear_seed_clients();
 
@@ -1054,7 +1065,8 @@ module mem_frontend_top_tb;
                        16'h0000, 16'h0000, 16'h0000, 16'h0000);
 
     hsu_seed_req  = 1'b1;
-    hsu_seed_addr = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd1);
+    hsu_seed_id   = SEED_ID_RHO;
+    hsu_seed_idx  = 2'd1;
     tick();
     clear_seed_clients();
     if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h0)

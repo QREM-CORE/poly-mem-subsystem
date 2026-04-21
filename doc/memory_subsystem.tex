@@ -545,9 +545,9 @@ and protocol metadata.
     boundary drives idle read data to zero.
 \end{itemize}
 
-At the bridge boundary above Memory, seed/protocol accesses are best
+At the \texttt{poly\_mem\_subsystem} boundary, seed/protocol accesses are
 described as \texttt{seed\_id + seed\_idx} (beat offset). The physical Seed
-Store remains address-based; a bridge computes:
+Store remains address-based; Memory computes the raw RAM address internally:
 
 \begin{equation}
   \texttt{seed\_addr} = \texttt{seed\_base\_addr(seed\_id)} + \texttt{seed\_idx}

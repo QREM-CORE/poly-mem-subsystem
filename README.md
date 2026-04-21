@@ -86,7 +86,8 @@ Semantic notes from `qrem_mem_map_pkg.sv`:
 
 ## Seed / Protocol Store
 
-The protocol store remains internally address-based, but bridge-facing logic above Memory should use:
+The protocol store remains internally address-based, but the Memory-facing HSU
+and Transcoder ports use semantic object access:
 
 - `seed_id`
 - `seed_idx`
@@ -107,7 +108,7 @@ Helper functions:
 - `seed_base_addr(seed_id)`
 - `seed_word_addr(seed_id, beat)`
 
-The intended contract above Memory is:
+The Memory boundary computes the raw RAM address internally as:
 
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
 

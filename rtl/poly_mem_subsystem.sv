@@ -136,7 +136,8 @@ module poly_mem_subsystem #(
   // ==========================================================================
   input  logic                               hsu_seed_req,
   input  logic                               hsu_seed_we,
-  input  logic [$clog2(SEED_DEPTH)-1:0]      hsu_seed_addr,
+  input  seed_id_e                           hsu_seed_id,
+  input  logic [$clog2(QREM_SEED_BEATS)-1:0] hsu_seed_idx,
   input  logic [SEED_W-1:0]                  hsu_seed_wdata,
   output logic                               hsu_seed_ready,
   output logic                               hsu_seed_rvalid,
@@ -147,7 +148,8 @@ module poly_mem_subsystem #(
   // ==========================================================================
   input  logic                               tr_seed_req,
   input  logic                               tr_seed_we,
-  input  logic [$clog2(SEED_DEPTH)-1:0]      tr_seed_addr,
+  input  seed_id_e                           tr_seed_id,
+  input  logic [$clog2(QREM_SEED_BEATS)-1:0] tr_seed_idx,
   input  logic [SEED_W-1:0]                  tr_seed_wdata,
   output logic                               tr_seed_ready,
   output logic                               tr_seed_rvalid,
@@ -772,18 +774,21 @@ module poly_mem_subsystem #(
   logic              seed_access_ready;
 
   logic               seed_a_we_mux, seed_b_we_mux;
+  logic [SEED_AW-1:0] hsu_seed_addr_int, tr_seed_addr_int;
   logic [SEED_AW-1:0] seed_a_addr_mux, seed_b_addr_mux;
   logic [SEED_W-1:0]  seed_a_wdata_mux, seed_b_wdata_mux;
 
   assign seed_access_ready = ~rst && ~wipe_active;
+  assign hsu_seed_addr_int = qrem_seed_map_pkg::seed_word_addr(hsu_seed_id, hsu_seed_idx);
+  assign tr_seed_addr_int  = qrem_seed_map_pkg::seed_word_addr(tr_seed_id, tr_seed_idx);
 
   always_comb begin
     seed_a_we_mux    = seed_access_ready && hsu_seed_we && hsu_seed_req;
-    seed_a_addr_mux  = hsu_seed_addr;
+    seed_a_addr_mux  = hsu_seed_addr_int;
     seed_a_wdata_mux = hsu_seed_wdata;
 
     seed_b_we_mux    = seed_access_ready && tr_seed_we && tr_seed_req;
-    seed_b_addr_mux  = tr_seed_addr;
+    seed_b_addr_mux  = tr_seed_addr_int;
     seed_b_wdata_mux = tr_seed_wdata;
 
     if (!rst && (wipe_state_q == WIPE_SEED)) begin
