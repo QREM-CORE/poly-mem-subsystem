@@ -31,21 +31,28 @@ Clarifications:
 
 ### Seed / protocol store interface
 
-The physical Memory-side seed/protocol ports remain:
+The physical Memory-side seed/protocol ports are now semantic:
 
 - HSU side:
-  - `hsu_seed_req`, `hsu_seed_we`, `hsu_seed_addr`, `hsu_seed_wdata`
+  - `hsu_seed_req`, `hsu_seed_we`, `hsu_seed_id`, `hsu_seed_idx`, `hsu_seed_wdata`
   - `hsu_seed_ready`, `hsu_seed_rvalid`, `hsu_seed_rdata`
 - Transcoder side:
-  - `tr_seed_req`, `tr_seed_we`, `tr_seed_addr`, `tr_seed_wdata`
+  - `tr_seed_req`, `tr_seed_we`, `tr_seed_id`, `tr_seed_idx`, `tr_seed_wdata`
   - `tr_seed_ready`, `tr_seed_rvalid`, `tr_seed_rdata`
 
-Above Memory, bridges should use semantic:
+At the Memory boundary, clients use semantic:
 
 - `seed_id`
 - `seed_idx`
 
 with:
+
+- `*_seed_ready` low during reset or wipe
+- `*_seed_rvalid` asserted one cycle after an accepted read
+- `*_seed_rdata` zero when `*_seed_rvalid` is low
+- raw RAM read-data registers left reset-free for BRAM-friendly inference; wipe clears stored protocol data
+
+`poly_mem_subsystem` computes the internal raw address as:
 
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
 

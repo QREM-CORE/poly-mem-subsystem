@@ -15,9 +15,10 @@
  *
  *   Reset notes:
  *     - Reset is active-high and synchronous.
- *     - Reset clears only the registered read outputs.
- *     - Memory contents are intentionally not reset here; the top-level wipe
- *       FSM is responsible for zeroising polynomial storage.
+ *     - Reset is kept for interface consistency but is intentionally unused
+ *       inside this RAM primitive.
+ *     - Memory contents and raw read-data registers are not reset here. The
+ *       top-level wipe FSM is responsible for zeroising polynomial storage.
  *
  *   Why we need this:
  *     Higher-level modules (like poly_mem_wrapper_4bank or poly_mem_subsystem)
@@ -35,7 +36,7 @@ module poly_ram_bank #(
   parameter int ADDR_W = $clog2(N)     // Address width needed for N entries
 )(
   input  logic              clk,       // System clock
-  input  logic              rst,       // Active-high synchronous reset
+  input  logic              rst,       // Kept for interface consistency; unused
 
   // --------------------------------------------------------------------------
   // PORT A (first memory port)
@@ -65,7 +66,7 @@ module poly_ram_bank #(
   // ...
   // mem[255] = last coefficient (if N=256)
   // --------------------------------------------------------------------------
-  logic [W-1:0] mem [0:N-1];
+ (* ram_style = "block" *) logic [W-1:0] mem [0:N-1];
 
   // --------------------------------------------------------------------------
   // PORT A behavior
@@ -78,14 +79,10 @@ module poly_ram_bank #(
   //   The read data appears AFTER the clock edge (synchronous read).
   // --------------------------------------------------------------------------
   always_ff @(posedge clk) begin
-    if (rst) begin
-      a_rdata <= '0;
-    end else begin
-      if (a_we)                       // If write enable is active
-        mem[a_addr] <= a_wdata;       // Write new data into memory
+    if (a_we)                         // If write enable is active
+      mem[a_addr] <= a_wdata;         // Write new data into memory
 
-      a_rdata <= mem[a_addr];         // Read data from the same address
-    end
+    a_rdata <= mem[a_addr];           // Read data from the same address
   end
 
   // --------------------------------------------------------------------------
@@ -95,14 +92,10 @@ module poly_ram_bank #(
   // This allows two accesses in the same clock cycle.
   // --------------------------------------------------------------------------
   always_ff @(posedge clk) begin
-    if (rst) begin
-      b_rdata <= '0;
-    end else begin
-      if (b_we)                       // If Port B write enable is active
-        mem[b_addr] <= b_wdata;       // Write data to memory
+    if (b_we)                         // If Port B write enable is active
+      mem[b_addr] <= b_wdata;         // Write data to memory
 
-      b_rdata <= mem[b_addr];         // Read memory value
-    end
+    b_rdata <= mem[b_addr];           // Read memory value
   end
 
 endmodule

@@ -4,8 +4,8 @@ package qrem_seed_map_pkg;
   // Seed / protocol store sizing
   // ---------------------------------------------------------------------------
   // v0.85 treats this as a lightweight protocol store for short fixed-size
-  // ML-KEM objects. It remains address-based inside Memory, while bridges above
-  // Memory may present semantic access as {seed_id, seed_idx}.
+  // ML-KEM objects. The raw seed RAM remains address-based, while
+  // poly_mem_subsystem presents semantic access as {seed_id, seed_idx}.
   //
   // A 32 x 64-bit layout is enough to keep the common 256-bit ML-KEM variables
   // resident at the same time without forcing immediate overwrite/reload churn.

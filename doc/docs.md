@@ -43,17 +43,24 @@ Meaning:
 
 Physical Memory-side ports:
 
-- HSU: `hsu_seed_req`, `hsu_seed_we`, `hsu_seed_addr`, `hsu_seed_wdata`, `hsu_seed_ready`, `hsu_seed_rvalid`, `hsu_seed_rdata`
-- Transcoder: `tr_seed_req`, `tr_seed_we`, `tr_seed_addr`, `tr_seed_wdata`, `tr_seed_ready`, `tr_seed_rvalid`, `tr_seed_rdata`
+- HSU: `hsu_seed_req`, `hsu_seed_we`, `hsu_seed_id`, `hsu_seed_idx`, `hsu_seed_wdata`, `hsu_seed_ready`, `hsu_seed_rvalid`, `hsu_seed_rdata`
+- Transcoder: `tr_seed_req`, `tr_seed_we`, `tr_seed_id`, `tr_seed_idx`, `tr_seed_wdata`, `tr_seed_ready`, `tr_seed_rvalid`, `tr_seed_rdata`
 
-Bridge-facing semantic contract above Memory:
+Semantic contract at the Memory boundary:
 
 - `seed_id`
 - `seed_idx`
 
-Address conversion:
+Internal raw RAM address conversion:
 
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
+
+Boundary behavior:
+
+- `*_seed_ready` is low during reset or wipe.
+- `*_seed_rvalid` asserts one cycle after an accepted read.
+- `*_seed_rdata` is driven to zero whenever `*_seed_rvalid` is low.
+- The raw seed RAM does not reset contents or read-data registers; the wipe FSM is the zeroization mechanism.
 
 ## 3. Internal Scheduling Model
 
@@ -159,6 +166,7 @@ Seed/protocol store timing:
 - accepted read in cycle `n`
 - read response in cycle `n+1`
 - write commits on the acceptance edge
+- reset/wipe deasserts `*_seed_ready`; idle read data is zeroed at the subsystem boundary
 
 ## 7. Polynomial Map
 

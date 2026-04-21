@@ -580,11 +580,13 @@ The seed RAM has two independent physical ports on
 
 \begin{itemize}
   \item HSU-side: \texttt{hsu\_seed\_req}, \texttt{hsu\_seed\_we},
-    \texttt{hsu\_seed\_addr}, \texttt{hsu\_seed\_wdata},
+    \texttt{hsu\_seed\_id}, \texttt{hsu\_seed\_idx},
+    \texttt{hsu\_seed\_wdata},
     \texttt{hsu\_seed\_ready}, \texttt{hsu\_seed\_rvalid},
     \texttt{hsu\_seed\_rdata}
   \item Transcoder-side: \texttt{tr\_seed\_req}, \texttt{tr\_seed\_we},
-    \texttt{tr\_seed\_addr}, \texttt{tr\_seed\_wdata},
+    \texttt{tr\_seed\_id}, \texttt{tr\_seed\_idx},
+    \texttt{tr\_seed\_wdata},
     \texttt{tr\_seed\_ready}, \texttt{tr\_seed\_rvalid},
     \texttt{tr\_seed\_rdata}
 \end{itemize}
@@ -592,6 +594,13 @@ The seed RAM has two independent physical ports on
 These ports are \textbf{completely independent} of the PAU/HSU/Transcoder
 polynomial scheduler. They can be used \emph{concurrently} with polynomial-bank
 traffic.
+
+During reset or wipe, both seed/protocol ports report not-ready. Seed read data
+is valid-qualified: the corresponding \texttt{*\_seed\_rvalid} signal asserts
+one cycle after an accepted read, and \texttt{*\_seed\_rdata} is driven to zero
+when no valid read response is present. The underlying RAM primitive does not
+reset its raw read-data registers; the wipe FSM is responsible for clearing
+stored protocol data.
 
 \subsection{Who Drives the Seed Port?}
 
@@ -622,9 +631,9 @@ bridges and the Main Controller use them. In the QREM architecture:
 \end{tabular}
 \end{table}
 
-\subsection{Bridge-Facing Seed ID + Beat Contract}
+\subsection{Memory-Facing Seed ID + Beat Contract}
 
-Above Memory, the cleaner abstraction is:
+At the Memory boundary, the client-facing abstraction is:
 
 \begin{itemize}
   \item \texttt{seed\_id}: semantic object selector such as
@@ -633,14 +642,14 @@ Above Memory, the cleaner abstraction is:
   \item \texttt{seed\_idx}: beat offset inside the selected object
 \end{itemize}
 
-The physical Seed Store remains address-based. A bridge computes:
+The physical Seed Store remains address-based. The Memory boundary computes:
 
 \[
   \texttt{seed\_addr = seed\_base\_addr(seed\_id) + seed\_idx}
 \]
 
-This keeps Memory simple while reducing magic-address burden on HSU and
-Transcoder designers.
+This keeps the RAM primitive simple while removing magic-address burden from
+HSU and Transcoder designers.
 
 \subsection{Seed RAM vs.\ Polynomial Banks: Key Differences}
 

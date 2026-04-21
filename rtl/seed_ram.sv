@@ -18,8 +18,10 @@
  * Notes:
  *   - Reads are synchronous with 1-cycle latency.
  *   - Reset is active-high and synchronous.
- *   - Reset clears only the registered read outputs. Memory contents are wiped
- *     by the top-level wipe FSM, not by reset.
+ *   - Reset is kept for interface consistency but is intentionally unused
+ *     inside this RAM primitive.
+ *   - Memory contents and raw read-data registers are not reset here. The
+ *     top-level wipe FSM zeroises protocol storage when required.
  */
 
 module seed_ram #(
@@ -28,7 +30,7 @@ module seed_ram #(
   parameter int ADDR_W = $clog2(DEPTH)
 )(
   input  logic              clk,
-  input  logic              rst,
+  input  logic              rst,       // Kept for interface consistency; unused
 
   // --------------------------------------------------------------------------
   // Port A (HSU-side seed access)
@@ -47,28 +49,20 @@ module seed_ram #(
   output logic [W-1:0]      b_rdata
 );
 
-  logic [W-1:0] mem [0:DEPTH-1];
+ (* ram_style = "block" *) logic [W-1:0] mem [0:DEPTH-1];
 
   always_ff @(posedge clk) begin
-    if (rst) begin
-      a_rdata <= '0;
-    end else begin
-      if (a_we)
-        mem[a_addr] <= a_wdata;
+    if (a_we)
+      mem[a_addr] <= a_wdata;
 
-      a_rdata <= mem[a_addr];
-    end
+    a_rdata <= mem[a_addr];
   end
 
   always_ff @(posedge clk) begin
-    if (rst) begin
-      b_rdata <= '0;
-    end else begin
-      if (b_we)
-        mem[b_addr] <= b_wdata;
+    if (b_we)
+      mem[b_addr] <= b_wdata;
 
-      b_rdata <= mem[b_addr];
-    end
+    b_rdata <= mem[b_addr];
   end
 
 endmodule
