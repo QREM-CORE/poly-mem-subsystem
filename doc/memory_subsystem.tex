@@ -75,8 +75,8 @@
 This document describes the polynomial memory subsystem designed for the
 QREM ML-KEM (FIPS~203) hardware accelerator. The subsystem provides
 four-coefficient parallel access per cycle using a four-bank dual-port
-memory architecture with conflict-free memory interface (CMI) bank
-mapping. A deterministic internal two-port scheduler maps up to two legal
+memory architecture with memory-side bit-pair-sum bank mapping. A
+deterministic internal two-port scheduler maps up to two legal
 client requests per cycle onto the shared polynomial banks while preserving
 strict client priority and atomic combined read/write phases. A dedicated
 dual-port seed/protocol store and a security-wipe finite state machine
@@ -140,9 +140,9 @@ The design follows the Memory Subsystem block described in:
 \begin{itemize}
   \item \textbf{4-coefficient parallel access} per cycle for NTT butterfly
     patterns.
-  \item \textbf{Conflict-free bank mapping} using the CMI bit-pair-sum
-    scheme, guaranteeing that every NTT butterfly pair at every stage maps
-    to distinct banks.
+  \item \textbf{Conflict-free bank mapping} using the memory-side
+    bit-pair-sum scheme, guaranteeing that every NTT butterfly pair at
+    every stage maps to distinct banks.
   \item \textbf{Multi-client arbitration} with strict priority
     (PAU~$>$~HSU~$>$~Transcoder) and stall-based flow control.
   \item \textbf{32-polynomial capacity} with configurable depth to support
@@ -197,7 +197,7 @@ encapsulates all memory resources and arbitration logic.
 % Poly wrapper
 \node[block, fill=cyan!10, minimum width=5.5cm, minimum height=1.5cm,
       below=0.5cm of mux]
-  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\CMI + Hazard Checks};
+  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\Bank Map + Hazard Checks};
 
 % Banks
 \node[block, fill=cyan!25, minimum width=1cm, below=0.5cm of wrap,
@@ -239,7 +239,7 @@ encapsulates all memory resources and arbitration logic.
 \end{figure}
 
 % ════════════════════════════════════════════════════════════════
-\section{Conflict-Free Memory Interface (CMI) Bank Mapping}
+\section{Memory-Side Bank Mapping}
 \label{sec:cmi}
 
 \subsection{Motivation}
@@ -252,8 +252,12 @@ memory to serialize the access.
 
 \subsection{Bit-Pair-Sum Scheme}
 
-The CMI scheme partitions the 8-bit coefficient index into four 2-bit
-fields and sums them modulo~4:
+Memory uses the same bit-pair-sum coefficient ordering formula expected
+by the PAU-side CMI path, but this section describes only the Memory-side
+bank/row decode. The PAU CMI adapter remains owned by PAU.
+
+The scheme partitions the 8-bit coefficient index into four 2-bit fields
+and sums them modulo~4:
 
 \begin{equation}
   \text{bank} = \bigl(\text{idx}[1{:}0] + \text{idx}[3{:}2]
@@ -277,18 +281,18 @@ And the final bank address is:
 
 \subsection{Verification}
 
-The CMI mapping is implemented as a combinational function
-\texttt{cmi\_bank\_idx()} inside \texttt{poly\_mem\_wrapper\_4bank.sv}:
+The Memory-side mapping is implemented as a combinational function
+\texttt{mem\_bank\_idx()} inside \texttt{poly\_mem\_wrapper\_4bank.sv}:
 
-\begin{lstlisting}[style=sv, caption={CMI bank mapping function.}]
-function automatic [1:0] cmi_bank_idx(
+\begin{lstlisting}[style=sv, caption={Memory bank mapping function.}]
+function automatic [1:0] mem_bank_idx(
   input logic [$clog2(N)-1:0] order
 );
   logic [3:0] sum;
   begin
     sum = order[1:0] + order[3:2]
         + order[5:4] + order[7:6];
-    cmi_bank_idx = sum[1:0];
+    mem_bank_idx = sum[1:0];
   end
 endfunction
 \end{lstlisting}
@@ -299,7 +303,7 @@ lands in distinct banks.
 
 \begin{table}[H]
 \centering
-\caption{CMI bank mapping for indices 0--11.}
+\caption{Memory bank mapping for indices 0--11.}
 \label{tab:cmi_example}
 \begin{tabular}{@{}cccccc@{}}
 \toprule
@@ -445,31 +449,29 @@ Total wipe latency:
 
 During wipe, all client requests are gated and stalled. The wipe writes
 consecutive groups of~4 indices per cycle, which always map to distinct
-banks under the CMI scheme, so no write conflicts can occur.
+banks under the memory-side bank-mapping scheme, so no write conflicts can occur.
 
 % ────────────────────────────────────────────────────────────
-\subsection{\texttt{mem\_arbiter} --- Legacy Priority Helper}
+\subsection{\texttt{poly\_mem\_subsystem} Scheduler}
 
-A purely combinational module implementing strict fixed-priority
-arbitration:
+The active top-level scheduler is implemented inside
+\texttt{poly\_mem\_subsystem}. It keeps strict fixed priority while also
+checking whether a second request can legally share the two internal memory
+ports in the same cycle:
 
 \begin{enumerate}
-  \item If \texttt{pau\_req\_i} $\rightarrow$ grant PAU; stall HSU and
-    Transcoder.
-  \item Else if \texttt{hsu\_req\_i} $\rightarrow$ grant HSU; stall
-    Transcoder.
-  \item Else if \texttt{tr\_req\_i} $\rightarrow$ grant Transcoder.
+  \item Admit the highest-priority schedulable request.
+  \item Admit a second request only if the pair is legal after
+    bank/address analysis.
+  \item If a client presents a combined read+write request, assign both
+    internal ports to that client atomically.
 \end{enumerate}
-
-The current \texttt{poly\_mem\_subsystem} no longer instantiates this
-module directly. The active top-level scheduler is implemented inline so it
-can reason about pair legality before admitting a second request.
 
 \textbf{Why strict priority?} The PAU sits on the critical path of NTT
 and CWM operations, which dominate ML-KEM's cycle count. Guaranteeing
-zero additional latency for the PAU maximizes overall throughput. The HSU
-and Transcoder operate in phases where the PAU is typically idle, so
-starvation is not a practical concern.
+zero additional latency for the PAU maximizes overall throughput. HSU
+polynomial access is write-only in this Memory repo phase, and Transcoder
+access remains lower priority.
 
 % ────────────────────────────────────────────────────────────
 \subsection{\texttt{poly\_mem\_wrapper\_4bank} --- 4-Bank Polynomial
@@ -481,8 +483,8 @@ RAM Port~A and Generic Port~1 binds to physical RAM Port~B, but either
 generic port may issue a legal read vector or write vector in a cycle.
 
 \begin{itemize}
-  \item \textbf{Bank mapping:} Uses \texttt{cmi\_bank\_idx()} to compute
-    the target bank and \texttt{cmi\_bank\_addr()} for the local address.
+  \item \textbf{Bank mapping:} Uses \texttt{mem\_bank\_idx()} to compute
+    the target bank and \texttt{mem\_bank\_addr()} for the local address.
   \item \textbf{Conflict detection:} Rejects same-request lane conflicts
     and cross-port same-address hazards. Read/read, write/write, and
     read/write overlap are all legal when final bank/address usage is safe.
@@ -501,12 +503,13 @@ $\text{BANK\_DEPTH} = 2048$ entries of $W = 16$~bits (default
 configuration).
 
 \begin{itemize}
-  \item \textbf{Port~A:} Used for reads. Address applied on cycle~$n$;
-    data available on cycle~$n{+}1$.
-  \item \textbf{Port~B:} Used for writes. Write-enable, address, and data
-    applied on the rising clock edge.
-  \item Both ports operate independently---simultaneous read on A and
-    write on B (even to the same address) is supported.
+  \item \textbf{Port~A and Port~B:} Both ports are generic RAM ports.
+    A port reads when its write-enable is low and writes when its
+    write-enable is asserted.
+  \item Reads return data on cycle~$n{+}1$; writes commit on the rising
+    clock edge.
+  \item The wrapper forbids ambiguous same-address read/write and
+    write/write cases before they reach the banks.
 \end{itemize}
 
 % ────────────────────────────────────────────────────────────
@@ -620,7 +623,7 @@ When a conflict is detected:
 \begin{itemize}
   \item \texttt{ready\_o} is deasserted.
   \item The request is \emph{not} accepted (no RAM access occurs).
-  \item The arbiter propagates the stall to the requesting client.
+  \item The scheduler/wrapper path propagates the stall to the requesting client.
   \item The client must hold its request until \texttt{stall} is released.
 \end{itemize}
 
@@ -640,9 +643,9 @@ key material after use. The wipe FSM provides a hardware-level guarantee:
   \item A single-cycle pulse on \texttt{wipe\_i} initiates the wipe.
   \item \textbf{WIPE\_POLY:} The FSM iterates over all 32~polynomials
     $\times$ 64 rows, writing 4~zero coefficients per cycle. Under the
-    CMI mapping, consecutive groups of~4 indices always land in distinct
-    banks, so no write conflict occurs and \texttt{ready\_o} remains
-    high throughout.
+    memory-side bank mapping, consecutive groups of~4 indices always land
+    in distinct banks, so no write conflict occurs and \texttt{ready\_o}
+    remains high throughout.
   \item \textbf{WIPE\_SEED:} The FSM zeroes all 32 seed RAM locations.
   \item \textbf{WIPE\_DONE:} Asserts \texttt{wipe\_done\_o} for one cycle
     and returns to idle.
@@ -681,8 +684,6 @@ make run_mem_frontend_top_tb SIM=verilator
     combined ownership, KeyGen placements, protocol store, wipe \\
 \texttt{poly\_mem\_wrapper\_4bank\_tb}
   & Wrapper legal overlap, same-address hazards, same-request conflicts \\
-\texttt{mem\_arbiter\_tb}
-  & Priority ordering, stall propagation \\
 \texttt{seed\_ram\_tb}
   & Write/read, address sweep \\
 \bottomrule
@@ -699,8 +700,8 @@ All testbenches output \texttt{TB PASS} upon successful completion.
 poly-mem-subsystem/
   rtl/
     qrem_mem_map_pkg.sv
+    qrem_seed_map_pkg.sv
     delay_n.sv
-    mem_arbiter.sv
     poly_ram_bank.sv
     seed_ram.sv
     poly_mem_wrapper_4bank.sv
@@ -709,7 +710,6 @@ poly-mem-subsystem/
     poly_mem_tb.sv
     mem_frontend_top_tb.sv
     poly_mem_wrapper_4bank_tb.sv
-    mem_arbiter_tb.sv
     seed_ram_tb.sv
   doc/
     docs.md
@@ -727,7 +727,7 @@ poly-mem-subsystem/
 The QREM polynomial memory subsystem provides:
 
 \begin{itemize}
-  \item A \textbf{four-bank dual-port polynomial memory} with CMI
+  \item A \textbf{four-bank dual-port polynomial memory} with memory-side
     conflict-free bank mapping ensuring zero-conflict NTT butterfly
     access.
   \item A \textbf{strict-priority 2-port scheduler} (PAU~$>$~HSU~$>$~Transcoder)
@@ -746,7 +746,7 @@ The QREM polynomial memory subsystem provides:
 
 The architecture follows the Memory Subsystem design described in
 \emph{``Highly-Efficient Hardware Architecture for ML-KEM PQC Standard''}
-(IEEE OJCAS, 2025) and is fully verified by six independent testbenches
+(IEEE OJCAS, 2025) and is fully verified by the active independent testbenches
 at the unit, integration, and system levels.
 
 \end{document}

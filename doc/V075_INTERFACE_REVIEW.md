@@ -23,6 +23,8 @@ Clarifications:
 - `rd_idx` / `wr_idx` are coefficient indices, not bank IDs
 - bank mapping and row mapping stay inside Memory
 - the client sees one stable external contract even though the internals now schedule two generic ports
+- HSU polynomial read signals remain in the port list for compatibility, but HSU polynomial access is write-only in this Memory repo phase
+- HSU reads protocol objects through the seed/protocol store, not through polynomial memory
 
 ### Seed / protocol store interface
 
@@ -89,6 +91,9 @@ That means the wrapper can legally support:
 - 1 read + 1 write in a cycle
 
 when the actual bank/address usage is safe.
+
+The wrapper performs only Memory-side bank/row decode. PAU-side CMI ownership
+remains in PAU and is not replaced by Memory.
 
 ## Hazard Rules
 

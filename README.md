@@ -18,9 +18,13 @@ The external polynomial-memory client contract remains stable:
 - `*_rd_valid`, `*_rd_poly_id_o`, `*_rd_idx_o`, `*_rd_lane_valid_o`, `*_rd_data`
 - `*_stall`
 
+HSU polynomial read signals are retained for interface stability, but HSU
+polynomial access is write-only in this repo phase. HSU reads protocol objects
+through the seed/protocol store.
+
 ## Key Features
 
-- 4-bank polynomial memory with CMI bit-pair-sum bank mapping
+- 4-bank polynomial memory with memory-side bit-pair-sum bank mapping
 - deterministic 2-port internal scheduling
 - strict client priority: `PAU > HSU > Transcoder`
 - legal `read/read`, `write/write`, and `read/write` overlap when bank/address pairs are safe
@@ -108,7 +112,6 @@ The intended contract above Memory is:
 | `rtl/seed_ram.sv` | Dual-port protocol store RAM |
 | `rtl/qrem_mem_map_pkg.sv` | Stable polynomial slot map plus semantic helpers/aliases |
 | `rtl/qrem_seed_map_pkg.sv` | Stable protocol-store map plus semantic address helpers |
-| `rtl/mem_arbiter.sv` | Legacy strict-priority helper retained in the repo; current top-level scheduling is in `poly_mem_subsystem.sv` |
 | `rtl/delay_n.sv` | Shared utility delay line |
 
 ## Hazard Rules
@@ -146,3 +149,6 @@ The shared `make` flow depends on the `build-tools` submodule being initialized 
 ## Follow-On Note
 
 This phase intentionally does not modify PAU RTL. Memory now makes the intended v0.75 KeyGen placements expressible and testable, but PAU still needs a follow-on integration update for the richer source/destination contract implied by MAC-heavy row processing.
+
+PAU-side CMI ownership remains in PAU. Memory only performs the memory-side
+bank/row decode needed to access its RAM banks safely.

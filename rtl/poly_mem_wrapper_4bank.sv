@@ -21,7 +21,8 @@
  * Notes:
  *   - Reset is active-high and synchronous.
  *   - Read response latency is 1 cycle from accepted read request.
- *   - CMI bit-pair-sum bank mapping is used for both ports.
+ *   - Memory-side bit-pair-sum bank mapping is used for both ports.
+ *     This is bank/row decode logic only; PAU-side CMI remains in PAU.
  *   - Same-address read+write is explicitly forbidden.
  *   - Same-address write+write is explicitly forbidden.
  *   - Same-request lane conflicts remain illegal.
@@ -78,7 +79,7 @@ module poly_mem_wrapper_4bank #(
 
   initial begin
     if (N != 256)
-      $display("Warning: cmi_bank_idx helper currently assumes 8-bit indices / N=256.");
+      $display("Warning: mem_bank_idx helper currently assumes 8-bit indices / N=256.");
     if (N % 4 != 0)
       $fatal(1, "poly_mem_wrapper_4bank: N must be divisible by 4");
   end
@@ -115,35 +116,35 @@ module poly_mem_wrapper_4bank #(
   logic [NUM_BANKS-1:0][W-1:0]       a_wdata, b_wdata;
   logic [NUM_BANKS-1:0][W-1:0]       a_rdata, b_rdata;
 
-  function automatic [1:0] cmi_bank_idx(
+  function automatic [1:0] mem_bank_idx(
     input logic [$clog2(N)-1:0] order
   );
     logic [3:0] sum;
     begin
       sum = order[1:0] + order[3:2] + order[5:4] + order[7:6];
-      cmi_bank_idx = sum[1:0];
+      mem_bank_idx = sum[1:0];
     end
   endfunction
 
-  function automatic [BANK_AW-1:0] cmi_bank_addr(
+  function automatic [BANK_AW-1:0] mem_bank_addr(
     input logic [$clog2(NUM_POLYS)-1:0] pid,
     input logic [$clog2(N)-1:0]         order
   );
     logic [$clog2(SLICE_N)-1:0] row;
     begin
       row = order >> 2;
-      cmi_bank_addr = pid * SLICE_N + row;
+      mem_bank_addr = pid * SLICE_N + row;
     end
   endfunction
 
   genvar i;
   generate
     for (i = 0; i < 4; i++) begin : G_DECODE
-      assign p0_bank[i]  = cmi_bank_idx(p0_idx_i[i]);
-      assign p0_baddr[i] = cmi_bank_addr(p0_poly_id_i, p0_idx_i[i]);
+      assign p0_bank[i]  = mem_bank_idx(p0_idx_i[i]);
+      assign p0_baddr[i] = mem_bank_addr(p0_poly_id_i, p0_idx_i[i]);
 
-      assign p1_bank[i]  = cmi_bank_idx(p1_idx_i[i]);
-      assign p1_baddr[i] = cmi_bank_addr(p1_poly_id_i, p1_idx_i[i]);
+      assign p1_bank[i]  = mem_bank_idx(p1_idx_i[i]);
+      assign p1_baddr[i] = mem_bank_addr(p1_poly_id_i, p1_idx_i[i]);
     end
   endgenerate
 

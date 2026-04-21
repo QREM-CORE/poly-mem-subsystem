@@ -78,7 +78,7 @@ polynomial memory subsystem---four polynomial banks and one seed
 store---are connected to the three system clients (PAU, HSU, Transcoder)
 and the internal wipe FSM. For each client, it describes \emph{what}
 data is stored, \emph{why} that client needs it, and \emph{how} the
-data flows through the arbitration, bank-mapping, and response-routing
+data flows through the scheduling, bank-mapping, and response-routing
 logic.
 \end{abstract}
 
@@ -158,7 +158,7 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 
 % Wrapper
 \node[logic, fill=cyan!6, minimum width=5cm, below=0.6cm of mux]
-  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\CMI + Hazard Checks};
+  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\Bank Map + Hazard Checks};
 
 % Banks
 \node[bank, below=0.8cm of wrap, xshift=-3cm] (b0) {Bank\,0\\Port A / B};
@@ -236,11 +236,11 @@ through the same scheduler and wrapper. The subsystem may admit up to two
 legal single-sided requests in a cycle; if a client presents a combined
 read+write request, it owns both internal ports atomically. Every issued
 request is routed through the \emph{same}
-\texttt{poly\_mem\_wrapper\_4bank} instance, which applies the same CMI
-bank-mapping function regardless of which client is requesting.
+\texttt{poly\_mem\_wrapper\_4bank} instance, which applies the same
+Memory-side bank-mapping function regardless of which client is requesting.
 
 The seed RAM is on a \textbf{completely separate dual-port path} that
-bypasses the polynomial arbiter entirely.
+bypasses the polynomial scheduler entirely.
 
 % ════════════════════════════════════════════════════════════════
 \section{How a Request Reaches the Banks}
@@ -266,11 +266,11 @@ initiation to response:
     active, its internally generated zero-write command replaces the
     client-muxed signals. All client requests are gated off during wipe.
 
-  \item \textbf{Wrapper applies CMI mapping.} For each of the 4~lanes,
+  \item \textbf{Wrapper applies Memory-side bank mapping.} For each of the 4~lanes,
     \texttt{poly\_mem\_wrapper\_4bank} computes:
     \begin{align*}
-      \text{bank}[i] &= \texttt{cmi\_bank\_idx}(\text{idx}[i]) \\
-      \text{addr}[i] &= \texttt{cmi\_bank\_addr}(\text{poly\_id},\;\text{idx}[i])
+      \text{bank}[i] &= \texttt{mem\_bank\_idx}(\text{idx}[i]) \\
+      \text{addr}[i] &= \texttt{mem\_bank\_addr}(\text{poly\_id},\;\text{idx}[i])
     \end{align*}
 
   \item \textbf{Conflict check.} The wrapper rejects same-request lane
@@ -422,7 +422,7 @@ Sample CBD & --- & 4~coeffs/cycle &
 
 \subsubsection{Why It Needs All 4 Banks}
 
-The HSU writes coefficients in sequential groups of~4. Under the CMI
+The HSU writes coefficients in sequential groups of~4. Under the memory-side
 bit-pair-sum mapping, consecutive groups of indices
 $\{4k, 4k{+}1, 4k{+}2, 4k{+}3\}$ always land in four distinct banks,
 so the HSU can sustain one 4-coefficient write per cycle with zero
@@ -460,7 +460,7 @@ HSU reads protocol objects such as seeds through the dedicated
 
 At the system level, the HSU's Keccak core needs to read the seed
 ($\rho$ or $\sigma$) to begin hashing. The seed RAM port on
-\texttt{poly\_mem\_subsystem} is independent of the polynomial arbiter,
+\texttt{poly\_mem\_subsystem} is independent of the polynomial scheduler,
 so the system controller can route the HSU's seed reads through the
 \texttt{seed\_*} port \textbf{concurrently} with a polynomial bank
 access---no arbitration conflict occurs.
@@ -502,7 +502,7 @@ Decompress & --- & 4~coeffs &
 \subsubsection{Why It Needs All 4 Banks}
 
 The Transcoder accesses coefficients sequentially (index 0, 1, 2, 3,
-then 4, 5, 6, 7, \ldots). Under CMI mapping, each group of~4
+then 4, 5, 6, 7, \ldots). Under memory-side bank mapping, each group of~4
 consecutive indices maps to distinct banks, allowing the Transcoder to
 process 4~coefficients per cycle without conflicts.
 
@@ -569,7 +569,7 @@ The seed RAM has two independent physical ports on
 \end{itemize}
 
 These ports are \textbf{completely independent} of the PAU/HSU/Transcoder
-polynomial arbiter. They can be used \emph{concurrently} with polynomial-bank
+polynomial scheduler. They can be used \emph{concurrently} with polynomial-bank
 traffic.
 
 \subsection{Who Drives the Seed Port?}
@@ -635,7 +635,7 @@ Module       & \texttt{poly\_ram\_bank}     & \texttt{seed\_ram} \\
 Width        & 16 bits                       & 64 bits \\
 Depth        & 2048 entries each             & 32 entries \\
 Ports        & Dual-port (physical A/B under 2-port scheduler) & Dual-port (HSU + Transcoder) \\
-Bank mapping & CMI bit-pair-sum              & Direct address \\
+Bank mapping & Memory-side bit-pair-sum     & Direct address \\
 Arbitrated   & Yes (PAU$>$HSU$>$Transcoder)  & No (independent port) \\
 Data stored  & Polynomial coefficients       & Seeds, hash state,
                protocol metadata \\
@@ -675,7 +675,7 @@ their requests off entirely.
 \textbf{Cycles} \\
 \midrule
 \texttt{WIPE\_POLY} & Banks 0--3 &
-  4-lane write (all zeroes) via Port~B &
+  4-lane write (all zeroes) via one generic port &
   $32 \times 64 = 2048$ \\
 \texttt{WIPE\_SEED} & Seed RAM &
   Single-word write (zero) &
@@ -688,9 +688,9 @@ their requests off entirely.
 \end{table}
 
 During \texttt{WIPE\_POLY}, the FSM writes indices
-$\{4r, 4r{+}1, 4r{+}2, 4r{+}3\}$ for each row~$r$. Under CMI mapping,
+$\{4r, 4r{+}1, 4r{+}2, 4r{+}3\}$ for each row~$r$. Under memory-side bank mapping,
 these four indices always map to four distinct banks, so all four
-Port~B write-enables fire simultaneously with no conflict.
+selected-port write-enables fire simultaneously with no conflict.
 
 % ════════════════════════════════════════════════════════════════
 \section{Summary: Complete Access Map}
@@ -706,13 +706,13 @@ Port~B write-enables fire simultaneously with no conflict.
 \textbf{Bank 3} & \textbf{Seed RAM} \\
 \midrule
 \textbf{PAU} &
-\multicolumn{4}{c}{R/W via arbiter + CMI adapter (highest priority)} &
+\multicolumn{4}{c}{R/W via scheduler (highest priority; PAU-side CMI external)} &
 --- \\
 \textbf{HSU} &
-\multicolumn{4}{c}{R/W via arbiter + Poly Stream Writer (mid priority)} &
+\multicolumn{4}{c}{W via scheduler + Poly Stream Writer (mid priority)} &
 R/W (dedicated seed-side port) \\
 \textbf{Transcoder} &
-\multicolumn{4}{c}{R/W via arbiter (lowest priority)} &
+\multicolumn{4}{c}{R/W via scheduler (lowest priority)} &
 R/W (dedicated seed-side port) \\
 \textbf{Controller} &
 --- & --- & --- & --- &
@@ -730,12 +730,12 @@ W (zeroes all entries) \\
 \begin{itemize}
   \item The four polynomial banks are a \textbf{shared resource}. No
     bank is ``owned'' by any client---every client's indices pass through
-    the same CMI bank-mapping function, and the bank each coefficient
+    the same Memory-side bank-mapping function, and the bank each coefficient
     lands in depends solely on the coefficient index, not on which
     client issued the request.
   \item The seed RAM is \textbf{not} part of the polynomial bank array.
     It is a separate, independent dual-port memory with no polynomial-bank
-    arbiter involvement.
+    scheduler involvement.
   \item The polynomial subsystem supports up to two \textbf{legal issued
     requests} per cycle. They may be read/read, write/write, or read/write
     when safe, while a combined read+write request owns both internal ports

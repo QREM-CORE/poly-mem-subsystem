@@ -167,27 +167,28 @@ module poly_mem_subsystem #(
   logic [2:0]    poly_fault_code;
 
   // --------------------------------------------------------------------------
-  // Local CMI decode helpers used only for scheduling preview.
+  // Local memory-bank decode helpers used only for scheduling preview.
+  // These mirror the wrapper bank/row mapping; they are not the PAU CMI.
   // The wrapper remains authoritative for the actual bank/row access.
   // --------------------------------------------------------------------------
-  function automatic [1:0] cmi_bank_idx(
+  function automatic [1:0] mem_bank_idx(
     input logic [COEFF_W-1:0] order
   );
     logic [3:0] sum;
     begin
       sum = order[1:0] + order[3:2] + order[5:4] + order[7:6];
-      cmi_bank_idx = sum[1:0];
+      mem_bank_idx = sum[1:0];
     end
   endfunction
 
-  function automatic [BANK_AW-1:0] cmi_bank_addr(
+  function automatic [BANK_AW-1:0] mem_bank_addr(
     input logic [POLY_W-1:0] pid,
     input logic [COEFF_W-1:0] order
   );
     logic [ROW_W-1:0] row;
     begin
       row = order >> 2;
-      cmi_bank_addr = pid * ROWS_PER_POLY_BANK + row;
+      mem_bank_addr = pid * ROWS_PER_POLY_BANK + row;
     end
   endfunction
 
@@ -202,7 +203,7 @@ module poly_mem_subsystem #(
       req_has_conflict = 1'b0;
 
       for (ii = 0; ii < 4; ii++) begin
-        bank[ii] = cmi_bank_idx(idx[ii]);
+        bank[ii] = mem_bank_idx(idx[ii]);
       end
 
       for (ii = 0; ii < 4; ii++) begin
@@ -234,10 +235,10 @@ module poly_mem_subsystem #(
         req_pair_legal = 1'b1;
       end else begin
         for (ii = 0; ii < 4; ii++) begin
-          a_bank[ii]  = cmi_bank_idx(a_idx[ii]);
-          a_baddr[ii] = cmi_bank_addr(a_poly_id, a_idx[ii]);
-          b_bank[ii]  = cmi_bank_idx(b_idx[ii]);
-          b_baddr[ii] = cmi_bank_addr(b_poly_id, b_idx[ii]);
+          a_bank[ii]  = mem_bank_idx(a_idx[ii]);
+          a_baddr[ii] = mem_bank_addr(a_poly_id, a_idx[ii]);
+          b_bank[ii]  = mem_bank_idx(b_idx[ii]);
+          b_baddr[ii] = mem_bank_addr(b_poly_id, b_idx[ii]);
         end
 
         for (ii = 0; ii < 4; ii++) begin
@@ -257,7 +258,7 @@ module poly_mem_subsystem #(
   // Per-client request classification
   // --------------------------------------------------------------------------
   logic pau_rd_req, pau_wr_req, pau_both_req, pau_single_req;
-  logic hsu_rd_req, hsu_wr_req, hsu_both_req, hsu_single_req;
+  logic hsu_wr_req, hsu_single_req;
   logic tr_rd_req, tr_wr_req, tr_both_req, tr_single_req;
   logic hsu_poly_rd_unsupported;
 
@@ -269,10 +270,8 @@ module poly_mem_subsystem #(
   // HSU consumes polynomial memory only as a writer. Any asserted poly-read
   // request is treated as unsupported and must retry as a seed/protocol read.
   assign hsu_poly_rd_unsupported = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
-  assign hsu_rd_req    = 1'b0;
   assign hsu_wr_req    = hsu_req && ~hsu_poly_rd_unsupported && (|hsu_wr_en);
-  assign hsu_both_req  = hsu_rd_req && hsu_wr_req;
-  assign hsu_single_req = (hsu_rd_req || hsu_wr_req) && ~hsu_both_req;
+  assign hsu_single_req = hsu_wr_req;
 
   assign tr_rd_req     = tr_req && tr_rd_en && (|tr_rd_lane_valid);
   assign tr_wr_req     = tr_req && (|tr_wr_en);
@@ -290,25 +289,23 @@ module poly_mem_subsystem #(
   // --------------------------------------------------------------------------
   // Combined-owner detection
   // --------------------------------------------------------------------------
-  logic combo_pau, combo_hsu, combo_tr, combo_any;
+  logic combo_pau, combo_tr, combo_any;
   client_owner_e combo_owner;
 
   assign combo_pau = ~wipe_active && pau_both_req;
-  assign combo_hsu = ~combo_pau && ~wipe_active && hsu_both_req;
-  assign combo_tr  = ~combo_pau && ~combo_hsu && ~wipe_active && tr_both_req;
-  assign combo_any = combo_pau || combo_hsu || combo_tr;
+  assign combo_tr  = ~combo_pau && ~wipe_active && tr_both_req;
+  assign combo_any = combo_pau || combo_tr;
 
   always_comb begin
     combo_owner = OWNER_NONE;
     if (combo_pau) combo_owner = OWNER_PAU;
-    else if (combo_hsu) combo_owner = OWNER_HSU;
     else if (combo_tr) combo_owner = OWNER_TR;
   end
 
   // --------------------------------------------------------------------------
   // Normalized one-sided request views used by the 2-port scheduler
   // --------------------------------------------------------------------------
-  logic        pau_is_wr_req, hsu_is_wr_req, tr_is_wr_req;
+  logic        pau_is_wr_req, tr_is_wr_req;
   logic [POLY_W-1:0]        pau_poly_id_req, hsu_poly_id_req, tr_poly_id_req;
   logic [3:0][COEFF_W-1:0] pau_idx_req, hsu_idx_req, tr_idx_req;
   logic [3:0]              pau_lane_mask_req, hsu_lane_mask_req, tr_lane_mask_req;
@@ -316,19 +313,18 @@ module poly_mem_subsystem #(
   logic                    pau_conflict_req, hsu_conflict_req, tr_conflict_req;
 
   assign pau_is_wr_req       = pau_wr_req;
-  assign hsu_is_wr_req       = hsu_wr_req;
   assign tr_is_wr_req        = tr_wr_req;
 
   assign pau_poly_id_req     = pau_wr_req ? pau_wr_poly_id : pau_rd_poly_id;
-  assign hsu_poly_id_req     = hsu_wr_req ? hsu_wr_poly_id : hsu_rd_poly_id;
+  assign hsu_poly_id_req     = hsu_wr_poly_id;
   assign tr_poly_id_req      = tr_wr_req  ? tr_wr_poly_id  : tr_rd_poly_id;
 
   assign pau_idx_req         = pau_wr_req ? pau_wr_idx : pau_rd_idx;
-  assign hsu_idx_req         = hsu_wr_req ? hsu_wr_idx : hsu_rd_idx;
+  assign hsu_idx_req         = hsu_wr_idx;
   assign tr_idx_req          = tr_wr_req  ? tr_wr_idx  : tr_rd_idx;
 
   assign pau_lane_mask_req   = pau_wr_req ? pau_wr_en : pau_rd_lane_valid;
-  assign hsu_lane_mask_req   = hsu_wr_req ? hsu_wr_en : hsu_rd_lane_valid;
+  assign hsu_lane_mask_req   = hsu_wr_en;
   assign tr_lane_mask_req    = tr_wr_req  ? tr_wr_en  : tr_rd_lane_valid;
 
   assign pau_data_req        = pau_wr_data;
@@ -380,10 +376,7 @@ module poly_mem_subsystem #(
         p0_sel_conflict  = pau_conflict_req;
       end else if (hsu_single_req) begin
         p0_sel_owner     = OWNER_HSU;
-        if (hsu_is_wr_req)
-          p0_sel_kind = REQ_WRITE;
-        else
-          p0_sel_kind = REQ_READ;
+        p0_sel_kind      = REQ_WRITE;
         p0_sel_poly_id   = hsu_poly_id_req;
         p0_sel_idx       = hsu_idx_req;
         p0_sel_lane_mask = hsu_lane_mask_req;
@@ -420,13 +413,10 @@ module poly_mem_subsystem #(
         end else if ((p0_sel_owner != OWNER_HSU) && hsu_single_req && !hsu_conflict_req &&
                      req_pair_legal(
                        (p0_sel_kind == REQ_WRITE), p0_sel_poly_id, p0_sel_idx, p0_sel_lane_mask,
-                       hsu_is_wr_req, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
+                       1'b1, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
                      )) begin
           p1_sel_owner     = OWNER_HSU;
-          if (hsu_is_wr_req)
-            p1_sel_kind = REQ_WRITE;
-          else
-            p1_sel_kind = REQ_READ;
+          p1_sel_kind      = REQ_WRITE;
           p1_sel_poly_id   = hsu_poly_id_req;
           p1_sel_idx       = hsu_idx_req;
           p1_sel_lane_mask = hsu_lane_mask_req;
@@ -504,15 +494,6 @@ module poly_mem_subsystem #(
           p1_idx_mux        = pau_wr_idx;
           p1_data_mux       = pau_wr_data;
         end
-        OWNER_HSU: begin
-          p0_poly_id_mux    = hsu_rd_poly_id;
-          p0_idx_mux        = hsu_rd_idx;
-          p0_lane_valid_mux = hsu_rd_lane_valid;
-          p1_poly_id_mux    = hsu_wr_poly_id;
-          p1_wr_en_mux      = hsu_wr_en;
-          p1_idx_mux        = hsu_wr_idx;
-          p1_data_mux       = hsu_wr_data;
-        end
         OWNER_TR: begin
           p0_poly_id_mux    = tr_rd_poly_id;
           p0_idx_mux        = tr_rd_idx;
@@ -543,10 +524,7 @@ module poly_mem_subsystem #(
           p0_poly_id_mux = p0_sel_poly_id;
           p0_idx_mux     = p0_sel_idx;
           p0_v_mux       = 1'b1;
-          if (p0_sel_kind == REQ_READ) begin
-            p0_lane_valid_mux = p0_sel_lane_mask;
-            p0_read_owner_sel = OWNER_HSU;
-          end else if (p0_sel_kind == REQ_WRITE) begin
+          if (p0_sel_kind == REQ_WRITE) begin
             p0_wr_en_mux = p0_sel_lane_mask;
             p0_data_mux  = p0_sel_data;
           end
@@ -584,10 +562,7 @@ module poly_mem_subsystem #(
           p1_poly_id_mux = p1_sel_poly_id;
           p1_idx_mux     = p1_sel_idx;
           p1_v_mux       = 1'b1;
-          if (p1_sel_kind == REQ_READ) begin
-            p1_lane_valid_mux = p1_sel_lane_mask;
-            p1_read_owner_sel = OWNER_HSU;
-          end else if (p1_sel_kind == REQ_WRITE) begin
+          if (p1_sel_kind == REQ_WRITE) begin
             p1_wr_en_mux = p1_sel_lane_mask;
             p1_data_mux  = p1_sel_data;
           end
@@ -731,7 +706,7 @@ module poly_mem_subsystem #(
       tr_stall  = tr_req;
     end else if (combo_any) begin
       pau_stall = pau_req && (~combo_pau || ~combo_can_fire);
-      hsu_stall = hsu_req && (~combo_hsu || ~combo_can_fire);
+      hsu_stall = hsu_req;
       tr_stall  = tr_req  && (~combo_tr  || ~combo_can_fire);
     end else begin
       if (pau_single_req) begin
@@ -787,13 +762,6 @@ module poly_mem_subsystem #(
           pau_rd_lane_valid_o = p0_rd_lane_valid_int;
           pau_rd_data         = p0_rd_data_int;
         end
-        OWNER_HSU: begin
-          hsu_rd_valid        = 1'b1;
-          hsu_rd_poly_id_o    = p0_rd_poly_id_int;
-          hsu_rd_idx_o        = p0_rd_idx_int;
-          hsu_rd_lane_valid_o = p0_rd_lane_valid_int;
-          hsu_rd_data         = p0_rd_data_int;
-        end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;
           tr_rd_poly_id_o     = p0_rd_poly_id_int;
@@ -814,13 +782,6 @@ module poly_mem_subsystem #(
           pau_rd_idx_o        = p1_rd_idx_int;
           pau_rd_lane_valid_o = p1_rd_lane_valid_int;
           pau_rd_data         = p1_rd_data_int;
-        end
-        OWNER_HSU: begin
-          hsu_rd_valid        = 1'b1;
-          hsu_rd_poly_id_o    = p1_rd_poly_id_int;
-          hsu_rd_idx_o        = p1_rd_idx_int;
-          hsu_rd_lane_valid_o = p1_rd_lane_valid_int;
-          hsu_rd_data         = p1_rd_data_int;
         end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;

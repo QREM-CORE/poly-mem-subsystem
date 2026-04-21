@@ -29,6 +29,9 @@ Meaning:
 - one request may contain a read side, a write side, or both
 - `rd_idx` / `wr_idx` are coefficient indices
 - Memory performs bank and row mapping internally
+- HSU polynomial read signals are retained for port stability, but HSU
+  polynomial access is write-only; HSU reads protocol objects through the
+  seed/protocol store
 
 ### 2.2 Seed / protocol store contract
 
@@ -97,11 +100,13 @@ Each generic port may carry:
 
 The wrapper is responsible for:
 
-- CMI bank mapping
+- memory-side bit-pair-sum bank mapping
 - bank-local row mapping
 - same-request lane conflict detection
 - cross-port same-address hazard detection
 - read metadata alignment and data reordering
+
+This bank mapping is Memory-side decode only. PAU-side CMI remains owned by PAU.
 
 ## 5. Hazard Rules
 
@@ -220,7 +225,6 @@ The A-matrix region stays fully resident-capable, while `POLY_ID_A_STREAM_SCRATC
 | `rtl/seed_ram.sv` | Dual-port protocol store RAM |
 | `rtl/qrem_mem_map_pkg.sv` | Polynomial map package |
 | `rtl/qrem_seed_map_pkg.sv` | Protocol-store map package |
-| `rtl/mem_arbiter.sv` | Legacy helper retained in repo |
 | `rtl/delay_n.sv` | Shared utility delay line |
 
 ## 11. Test Coverage

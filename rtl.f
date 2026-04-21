@@ -6,7 +6,6 @@ rtl/qrem_seed_map_pkg.sv
 
 # 3. Local RTL (i.e., rtl/transcoder_unit.sv)
 rtl/delay_n.sv
-rtl/mem_arbiter.sv
 rtl/poly_ram_bank.sv
 rtl/seed_ram.sv
 rtl/poly_mem_wrapper_4bank.sv
