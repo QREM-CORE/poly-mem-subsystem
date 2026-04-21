@@ -19,7 +19,7 @@ jobs:
       commit_sha: ${{ github.sha }}
 
       # Your comma-separated top modules for the Yosys synthesis matrix
-      top_modules: 'mem_frontend_top'
+      top_modules: 'poly_mem_subsystem'
 
       enable_synth: true
       enable_lint: true
