@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   call-central-builder:
-    uses: QREM-CORE/build-tools/.github/workflows/central-builder.yml@xilinx_fpga_build
+    uses: QREM-CORE/build-tools/.github/workflows/central-builder.yml@main
     with:
       # Automatically targets the repository and specific commit of the PR
       rtl_repo: ${{ github.repository }}
@@ -21,7 +21,7 @@ jobs:
       # Your comma-separated top modules for the Yosys synthesis matrix
       top_modules: 'poly_mem_subsystem'
 
-      build_tools_ref: 'xilinx_fpga_build'
+      build_tools_ref: 'fix_fpga_build'
 
       synth_targets: 'fpga'
 
