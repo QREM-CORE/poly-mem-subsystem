@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-`poly_mem_subsystem.sv` is the authoritative top-level Memory module for the QREM v0.85 direction.
+`poly_mem_subsystem.sv` is the authoritative top-level Memory module for the QREM v0.9 direction.
 
 It owns:
 
@@ -29,9 +29,11 @@ Meaning:
 - one request may contain a read side, a write side, or both
 - `rd_idx` / `wr_idx` are coefficient indices
 - Memory performs bank and row mapping internally
-- HSU polynomial read signals are retained for port stability, but HSU
-  polynomial access is write-only; HSU reads protocol objects through the
-  seed/protocol store
+- HSU polynomial traffic is write-oriented during sampling/matrix-fill, with
+  one constrained read exception: during `KG_HSU_HASH_EK`, controller/Gearbox
+  glue may assert `hsu_hash_ek_read_en` and read only `T0..T3` through the HSU
+  response channel. Mixed HSU read/write requests and non-T-slot reads still
+  stall cleanly.
 - PAU has an additional auxiliary descriptor channel. When PAU primary and
   auxiliary descriptors are both valid and pair-legal, PAU owns both internal
   memory ports for that cycle. This is Memory-side scheduling support only;
@@ -217,6 +219,8 @@ Examples:
 - HSU writes the active row error into `POLY_ID_EI`; PAU later overwrites it as `e_hat_i`
 - HSU fills the active A row buffer in `POLY_ID_A0..POLY_ID_A3`
 - PAU writes final `t_hat_i` into `POLY_ID_T0..POLY_ID_T3`
+- During `KG_HSU_HASH_EK`, a Gearbox/read bridge may use the constrained HSU
+  T-slot read path to pack `t_hat` coefficients for the HSU hash input
 - Transcoder reads `t[i]` and protocol-store objects for egress
 - `rho`, `sigma`, `H(ek)`, `ss`, and temporary protocol values all fit the same protocol-store model
 
@@ -238,7 +242,7 @@ Examples:
 |---|---|
 | `tb/poly_mem_wrapper_4bank_tb.sv` | legal dual-read, dual-write, read/write overlap, same-address RW, same-address WW, same-request lane conflicts |
 | `tb/poly_mem_tb.sv` | fixed map constants, protocol-store ID+beat mapping, wipe |
-| `tb/mem_frontend_top_tb.sv` | PAU-owned dual-port phases, dual-read routing, dual-write scheduling, read/write overlap, combined atomicity, KeyGen slot placements, protocol-store concurrency, wipe |
+| `tb/mem_frontend_top_tb.sv` | PAU-owned dual-port phases, dual-read routing, dual-write scheduling, read/write overlap, combined atomicity, constrained HSU hash-ek T-slot reads, KeyGen slot placements, protocol-store concurrency, wipe |
 
 Expected output: `TB PASS`
 
@@ -248,3 +252,5 @@ Expected output: `TB PASS`
 - The verified local smoke path in this checkout used `iverilog` and `vvp`.
 - This pass intentionally does not modify PAU RTL.
 - PAU still needs a follow-on update for the richer source/destination contract implied by row-wise MAC-heavy flows.
+- Gearbox/controller glue still needs to drive the `KG_HSU_HASH_EK` T-slot
+  read sequence, ByteEncode12 packing, and HSU hash input stream outside Memory.

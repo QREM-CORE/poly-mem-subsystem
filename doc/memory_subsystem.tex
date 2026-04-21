@@ -479,8 +479,11 @@ ports in the same cycle:
 \textbf{Why strict priority?} The PAU sits on the critical path of NTT
 and CWM operations, which dominate ML-KEM's cycle count. Guaranteeing
 zero additional latency for the PAU maximizes overall throughput. HSU
-polynomial access is write-only in this Memory repo phase, and Transcoder
-access remains lower priority.
+polynomial traffic is write-oriented during sampling and matrix-fill, with
+one constrained \texttt{KG\_HSU\_HASH\_EK} read exception: when
+\texttt{hsu\_hash\_ek\_read\_en} is asserted, Memory may service HSU reads
+from final $T0\ldots T3$ slots only. Non-$T$ slots and HSU mixed read/write
+requests still stall cleanly. Transcoder access remains lower priority.
 
 % ────────────────────────────────────────────────────────────
 \subsection{\texttt{poly\_mem\_wrapper\_4bank} --- 4-Bank Polynomial
@@ -748,6 +751,10 @@ The QREM polynomial memory subsystem provides:
     with up to two read responses in a cycle.
   \item A \textbf{dedicated dual-port seed/protocol store} on independent
     HSU and Transcoder ports.
+  \item A \textbf{constrained HSU hash-ek read gate} allowing Gearbox-driven
+    reads from final $T0\ldots T3$ slots only during
+    \texttt{KG\_HSU\_HASH\_EK}; ByteEncode12 packing and HSU hash streaming
+    remain outside Memory.
   \item A \textbf{hardware security-wipe FSM} clearing all 32~polynomials
     and 32~seed/protocol locations in approximately 2081~cycles.
   \item \textbf{32-polynomial capacity} organized via a configurable

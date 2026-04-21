@@ -144,7 +144,7 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 
 % Clients
 \node[client, fill=orange!15] (pau) {PAU\\(via CMI)};
-\node[client, fill=yellow!15, right=1.5cm of pau] (hsu) {HSU\\(Poly Writer)};
+\node[client, fill=yellow!15, right=1.5cm of pau] (hsu) {HSU\\(Poly Writer / EK Hash Read)};
 \node[client, fill=green!12, right=1.5cm of hsu] (tr) {Transcoder};
 \node[client, fill=blue!10, right=1.5cm of tr] (ext) {HSU / TR\\Seed Bridge};
 
@@ -427,6 +427,9 @@ Sample NTT (rejection) & --- & 4~coeffs/cycle &
 Sample CBD & --- & 4~coeffs/cycle &
   Writes centered binomial coefficients for secret/error
   vectors. \\
+KG\_HSU\_HASH\_EK & 4~coeffs/cycle & --- &
+  Constrained read of final $T0\ldots T3$ slots through the Gearbox
+  for ByteEncode12 packing into the HSU hash path. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -452,11 +455,13 @@ bridge (external to this repository). The Poly Stream Writer:
   \item Presents a single 4-lane write request to the memory subsystem.
 \end{enumerate}
 
-The HSU is a \textbf{polynomial-memory writer}. The \texttt{hsu\_rd\_*}
-signals remain at the top-level interface for stability, but in the current
-Memory implementation HSU polynomial reads are intentionally unsupported.
-HSU reads protocol objects such as seeds through the dedicated
-\texttt{seed\_*} port instead.
+The HSU is \textbf{write-oriented} during sampling and matrix-fill. The
+\texttt{hsu\_rd\_*} signals remain at the top-level interface for stability
+and for one narrow v0.9 exception: during \texttt{KG\_HSU\_HASH\_EK},
+controller/Gearbox glue may assert \texttt{hsu\_hash\_ek\_read\_en} and
+read final $T0\ldots T3$ slots only. Non-$T$ slots and HSU mixed read/write
+requests still stall cleanly. HSU reads protocol objects such as seeds
+through the dedicated \texttt{seed\_*} port instead.
 
 \subsubsection{Which Polynomial Slots}
 
@@ -466,6 +471,10 @@ HSU reads protocol objects such as seeds through the dedicated
     $k=2$, $k=3$, or $k=4$.
   \item \textbf{Sample CBD:} Writes secret~$s$ slots 0--3 and the active
     error scratch slot~4 using SHAKE-256 CBD sampling.
+  \item \textbf{KG\_HSU\_HASH\_EK:} Reads final $t$ slots 9--12 through a
+    Gearbox/read bridge that owns sequencing, ByteEncode12 packing, and
+    feeding the HSU hash input. Memory only authorizes and services the
+    constrained $T0\ldots T3$ read.
 \end{itemize}
 
 \subsubsection{HSU and the Seed RAM}
@@ -721,7 +730,7 @@ selected-port write-enables fire simultaneously with no conflict.
 \multicolumn{4}{c}{R/W via scheduler (highest priority; PAU-side CMI external)} &
 --- \\
 \textbf{HSU} &
-\multicolumn{4}{c}{W via scheduler + Poly Stream Writer (mid priority)} &
+\multicolumn{4}{c}{W via scheduler; constrained T-slot R during KG\_HSU\_HASH\_EK} &
 R/W (dedicated seed-side port) \\
 \textbf{Transcoder} &
 \multicolumn{4}{c}{R/W via scheduler (lowest priority)} &

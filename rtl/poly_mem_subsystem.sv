@@ -4,7 +4,7 @@
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
  *
  * Description:
- *   Top-level polynomial / seed memory subsystem for QREM Core v0.85.
+ *   Top-level polynomial / seed memory subsystem for QREM Core v0.9.
  *
  * Key architectural rules implemented here:
  *   - Strict client priority remains PAU > HSU > Transcoder.
@@ -12,8 +12,8 @@
  *     two legal operations per cycle when hazards permit.
  *   - PAU may own both internal ports atomically through its primary and
  *     auxiliary descriptors.
- *   - HSU polynomial access is write-only in this repo phase; `hsu_rd_*`
- *     signals are kept only for top-level interface stability.
+ *   - HSU polynomial access is write-oriented except for the constrained
+ *     KG_HSU_HASH_EK T-slot read path authorized by hsu_hash_ek_read_en.
  *   - The seed / protocol store remains independent from polynomial
  *     arbitration and exposes one dedicated HSU-side port and one dedicated
  *     Transcoder-side port.
@@ -26,6 +26,7 @@
  *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
  */
 
+import qrem_mem_map_pkg::*;
 import qrem_seed_map_pkg::*;
 
 module poly_mem_subsystem #(
@@ -85,7 +86,14 @@ module poly_mem_subsystem #(
   output logic [3:0][W-1:0]                  pau_aux_rd_data,
 
   // ==========================================================================
-  // HSU / Poly Memory Writer polynomial-memory interface
+  // HSU KG_HSU_HASH_EK constrained read authorization
+  // ==========================================================================
+  input  logic                               hsu_hash_ek_read_en,
+
+  // ==========================================================================
+  // HSU polynomial-memory interface
+  // Writes are used during sampling/matrix-fill. Reads are accepted only for
+  // authorized KG_HSU_HASH_EK T-slot readout into the Gearbox/HSU hash path.
   // ==========================================================================
   input  logic                               hsu_req,
   input  logic                               hsu_rd_en,
@@ -279,7 +287,8 @@ module poly_mem_subsystem #(
   logic pau_rd_req, pau_wr_req, pau_both_req, pau_single_req;
   logic pau_aux_active, pau_aux_rd_req, pau_aux_wr_req, pau_aux_both_req;
   logic pau_pri_op_req, pau_aux_op_req, pau_dual_req, pau_dual_valid;
-  logic hsu_wr_req, hsu_single_req;
+  logic hsu_rd_req, hsu_wr_req, hsu_both_req, hsu_single_req;
+  logic hsu_rd_t_slot_req, hsu_rd_allowed_req;
   logic tr_rd_req, tr_wr_req, tr_both_req, tr_single_req;
   logic hsu_poly_rd_unsupported;
 
@@ -299,11 +308,20 @@ module poly_mem_subsystem #(
                             ~pau_both_req && ~pau_aux_both_req;
   assign pau_single_req   = ~pau_aux_active && pau_pri_op_req && ~pau_both_req;
 
-  // HSU consumes polynomial memory only as a writer. Any asserted poly-read
-  // request is treated as unsupported and must retry as a seed/protocol read.
-  assign hsu_poly_rd_unsupported = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
-  assign hsu_wr_req    = hsu_req && ~hsu_poly_rd_unsupported && (|hsu_wr_en);
-  assign hsu_single_req = hsu_wr_req;
+  // HSU remains write-oriented during sampling/matrix-fill. The only legal
+  // polynomial read exception is KG_HSU_HASH_EK, where a Gearbox bridge reads
+  // final t_hat slots T0..T3 for ByteEncode12 into the HSU hash path.
+  assign hsu_rd_req = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
+  assign hsu_wr_req = hsu_req && (|hsu_wr_en);
+  assign hsu_both_req = hsu_rd_req && hsu_wr_req;
+  assign hsu_rd_t_slot_req = (hsu_rd_poly_id == POLY_W'(POLY_ID_T0)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T1)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T2)) ||
+                             (hsu_rd_poly_id == POLY_W'(POLY_ID_T3));
+  assign hsu_rd_allowed_req = hsu_rd_req && hsu_hash_ek_read_en &&
+                              hsu_rd_t_slot_req && !hsu_wr_req;
+  assign hsu_poly_rd_unsupported = hsu_rd_req && !hsu_rd_allowed_req;
+  assign hsu_single_req = (hsu_wr_req || hsu_rd_allowed_req) && !hsu_both_req;
 
   assign tr_rd_req     = tr_req && tr_rd_en && (|tr_rd_lane_valid);
   assign tr_wr_req     = tr_req && (|tr_wr_en);
@@ -337,7 +355,7 @@ module poly_mem_subsystem #(
   // --------------------------------------------------------------------------
   // Normalized one-sided request views used by the 2-port scheduler
   // --------------------------------------------------------------------------
-  logic        pau_is_wr_req, pau_aux_is_wr_req, tr_is_wr_req;
+  logic        pau_is_wr_req, pau_aux_is_wr_req, hsu_is_wr_req, tr_is_wr_req;
   logic [POLY_W-1:0]        pau_poly_id_req, pau_aux_poly_id_req;
   logic [POLY_W-1:0]        hsu_poly_id_req, tr_poly_id_req;
   logic [3:0][COEFF_W-1:0] pau_idx_req, pau_aux_idx_req;
@@ -352,23 +370,25 @@ module poly_mem_subsystem #(
 
   assign pau_is_wr_req       = pau_wr_req;
   assign pau_aux_is_wr_req   = pau_aux_wr_req;
+  assign hsu_is_wr_req       = hsu_wr_req;
   assign tr_is_wr_req        = tr_wr_req;
 
   assign pau_poly_id_req     = pau_wr_req ? pau_wr_poly_id : pau_rd_poly_id;
   assign pau_aux_poly_id_req = pau_aux_wr_req ? pau_aux_wr_poly_id : pau_aux_rd_poly_id;
-  assign hsu_poly_id_req     = hsu_wr_poly_id;
+  assign hsu_poly_id_req     = hsu_wr_req ? hsu_wr_poly_id : hsu_rd_poly_id;
   assign tr_poly_id_req      = tr_wr_req  ? tr_wr_poly_id  : tr_rd_poly_id;
 
   assign pau_idx_req         = pau_wr_req ? pau_wr_idx : pau_rd_idx;
   assign pau_aux_idx_req     = pau_aux_wr_req ? pau_aux_wr_idx : pau_aux_rd_idx;
-  assign hsu_idx_req         = hsu_wr_idx;
+  assign hsu_idx_req         = hsu_wr_req ? hsu_wr_idx : hsu_rd_idx;
   assign tr_idx_req          = tr_wr_req  ? tr_wr_idx  : tr_rd_idx;
 
   assign pau_lane_mask_req   = pau_wr_req ? pau_wr_en :
                                (pau_rd_req ? pau_rd_lane_valid : '0);
   assign pau_aux_lane_mask_req = pau_aux_wr_req ? pau_aux_wr_en :
                                  (pau_aux_rd_req ? pau_aux_rd_lane_valid : '0);
-  assign hsu_lane_mask_req   = hsu_wr_en;
+  assign hsu_lane_mask_req   = hsu_wr_req ? hsu_wr_en :
+                               (hsu_rd_allowed_req ? hsu_rd_lane_valid : '0);
   assign tr_lane_mask_req    = tr_wr_req  ? tr_wr_en  : tr_rd_lane_valid;
 
   assign pau_data_req        = pau_wr_data;
@@ -451,7 +471,10 @@ module poly_mem_subsystem #(
         p0_sel_conflict  = pau_conflict_req;
       end else if (hsu_single_req) begin
         p0_sel_owner     = OWNER_HSU;
-        p0_sel_kind      = REQ_WRITE;
+        if (hsu_is_wr_req)
+          p0_sel_kind = REQ_WRITE;
+        else
+          p0_sel_kind = REQ_READ;
         p0_sel_poly_id   = hsu_poly_id_req;
         p0_sel_idx       = hsu_idx_req;
         p0_sel_lane_mask = hsu_lane_mask_req;
@@ -488,10 +511,13 @@ module poly_mem_subsystem #(
         end else if ((p0_sel_owner != OWNER_HSU) && hsu_single_req && !hsu_conflict_req &&
                      req_pair_legal(
                        (p0_sel_kind == REQ_WRITE), p0_sel_poly_id, p0_sel_idx, p0_sel_lane_mask,
-                       1'b1, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
+                       hsu_is_wr_req, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
                      )) begin
           p1_sel_owner     = OWNER_HSU;
-          p1_sel_kind      = REQ_WRITE;
+          if (hsu_is_wr_req)
+            p1_sel_kind = REQ_WRITE;
+          else
+            p1_sel_kind = REQ_READ;
           p1_sel_poly_id   = hsu_poly_id_req;
           p1_sel_idx       = hsu_idx_req;
           p1_sel_lane_mask = hsu_lane_mask_req;
@@ -611,7 +637,10 @@ module poly_mem_subsystem #(
           p0_poly_id_mux = p0_sel_poly_id;
           p0_idx_mux     = p0_sel_idx;
           p0_v_mux       = 1'b1;
-          if (p0_sel_kind == REQ_WRITE) begin
+          if (p0_sel_kind == REQ_READ) begin
+            p0_lane_valid_mux = p0_sel_lane_mask;
+            p0_read_owner_sel = OWNER_HSU;
+          end else if (p0_sel_kind == REQ_WRITE) begin
             p0_wr_en_mux = p0_sel_lane_mask;
             p0_data_mux  = p0_sel_data;
           end
@@ -661,7 +690,10 @@ module poly_mem_subsystem #(
           p1_poly_id_mux = p1_sel_poly_id;
           p1_idx_mux     = p1_sel_idx;
           p1_v_mux       = 1'b1;
-          if (p1_sel_kind == REQ_WRITE) begin
+          if (p1_sel_kind == REQ_READ) begin
+            p1_lane_valid_mux = p1_sel_lane_mask;
+            p1_read_owner_sel = OWNER_HSU;
+          end else if (p1_sel_kind == REQ_WRITE) begin
             p1_wr_en_mux = p1_sel_lane_mask;
             p1_data_mux  = p1_sel_data;
           end
@@ -878,6 +910,13 @@ module poly_mem_subsystem #(
           pau_aux_rd_lane_valid_o = p0_rd_lane_valid_int;
           pau_aux_rd_data         = p0_rd_data_int;
         end
+        OWNER_HSU: begin
+          hsu_rd_valid        = 1'b1;
+          hsu_rd_poly_id_o    = p0_rd_poly_id_int;
+          hsu_rd_idx_o        = p0_rd_idx_int;
+          hsu_rd_lane_valid_o = p0_rd_lane_valid_int;
+          hsu_rd_data         = p0_rd_data_int;
+        end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;
           tr_rd_poly_id_o     = p0_rd_poly_id_int;
@@ -905,6 +944,13 @@ module poly_mem_subsystem #(
           pau_aux_rd_idx_o        = p1_rd_idx_int;
           pau_aux_rd_lane_valid_o = p1_rd_lane_valid_int;
           pau_aux_rd_data         = p1_rd_data_int;
+        end
+        OWNER_HSU: begin
+          hsu_rd_valid        = 1'b1;
+          hsu_rd_poly_id_o    = p1_rd_poly_id_int;
+          hsu_rd_idx_o        = p1_rd_idx_int;
+          hsu_rd_lane_valid_o = p1_rd_lane_valid_int;
+          hsu_rd_data         = p1_rd_data_int;
         end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;

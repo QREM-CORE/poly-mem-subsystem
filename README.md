@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository implements the v0.85 Memory subsystem for the QREM ML-KEM hardware accelerator.
+This repository implements the v0.9 Memory subsystem for the QREM ML-KEM hardware accelerator.
 
 The subsystem owns:
 
@@ -23,9 +23,13 @@ own both internal memory ports in one cycle when the requested pair is legal.
 This supports PAU-owned read/read, read/write, and write/write phases without
 moving PAU-side CMI behavior into Memory.
 
-HSU polynomial read signals are retained for interface stability, but HSU
-polynomial access is write-only in this repo phase. HSU reads protocol objects
-through the seed/protocol store.
+HSU polynomial traffic remains write-oriented during sampling and matrix-fill.
+The only HSU polynomial-read exception is the constrained
+`KG_HSU_HASH_EK` path: controller/Gearbox glue asserts
+`hsu_hash_ek_read_en`, and Memory permits HSU reads only from `T0..T3`
+with no same-request write. The Gearbox/read bridge owns T-slot sequencing,
+ByteEncode12 packing, and feeding the HSU hash input. HSU reads protocol
+objects through the seed/protocol store.
 
 ## Key Features
 
@@ -138,7 +142,7 @@ The repo includes:
 
 - `tb/poly_mem_wrapper_4bank_tb.sv`: legal `RR/WW/RW` issue and wrapper hazard checks
 - `tb/poly_mem_tb.sv`: fixed map smoke, protocol-store ID+beat mapping, wipe
-- `tb/mem_frontend_top_tb.sv`: PAU-owned dual-port phases, dual-read routing, dual-write, read/write overlap, combined atomicity, KeyGen placements, protocol-store concurrency, wipe
+- `tb/mem_frontend_top_tb.sv`: PAU-owned dual-port phases, dual-read routing, dual-write, read/write overlap, combined atomicity, constrained HSU hash-ek T-slot reads, KeyGen placements, protocol-store concurrency, wipe
 
 Expected output is `TB PASS`.
 
@@ -153,7 +157,12 @@ The shared `make` flow depends on the `build-tools` submodule being initialized 
 
 ## Follow-On Note
 
-This phase intentionally does not modify PAU RTL. Memory now makes the intended v0.85 KeyGen placements expressible and testable, but PAU still needs a follow-on integration update for the richer source/destination contract implied by MAC-heavy row processing.
+This phase intentionally does not modify PAU RTL or implement the Gearbox
+bridge. Memory now makes the intended v0.9 KeyGen placements and constrained
+HSU hash-ek T-slot readout expressible and testable. PAU still needs a
+follow-on integration update for the richer source/destination contract
+implied by MAC-heavy row processing, and controller/Gearbox glue must drive
+`hsu_hash_ek_read_en` plus the HSU read sequence during `KG_HSU_HASH_EK`.
 
 PAU-side CMI ownership remains in PAU. Memory only performs the memory-side
 bank/row decode needed to access its RAM banks safely.

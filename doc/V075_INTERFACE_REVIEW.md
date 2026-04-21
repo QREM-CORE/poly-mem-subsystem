@@ -1,10 +1,10 @@
-# QREM Memory v0.85 Interface Review
+# QREM Memory v0.9 Interface Review
 
 Author: Quardin Lyttle
 
 ## Purpose
 
-This note captures the current Memory-repo contract after the v0.85 alignment pass. It focuses on what is stable, what changed internally, and how the current subsystem maps to the intended KeyGen / Encaps / Decaps direction.
+This note captures the current Memory-repo contract after the v0.9 alignment pass. It focuses on what is stable, what changed internally, and how the current subsystem maps to the intended KeyGen / Encaps / Decaps direction.
 
 ## What Stays Stable
 
@@ -23,8 +23,9 @@ Clarifications:
 - `rd_idx` / `wr_idx` are coefficient indices, not bank IDs
 - bank mapping and row mapping stay inside Memory
 - the client sees one stable external contract even though the internals now schedule two generic ports
-- HSU polynomial read signals remain in the port list for compatibility, but HSU polynomial access is write-only in this Memory repo phase
-- HSU reads protocol objects through the seed/protocol store, not through polynomial memory
+- HSU polynomial traffic is write-oriented during sampling/matrix-fill
+- during `KG_HSU_HASH_EK`, `hsu_hash_ek_read_en` authorizes a constrained HSU/Gearbox read path from `T0..T3` only
+- HSU mixed read/write requests and non-T-slot reads still stall cleanly; protocol objects still use the seed/protocol store
 - PAU has a primary-plus-auxiliary descriptor path so PAU can own both internal ports for legal read/read, read/write, and write/write phases
 - PAU-side CMI remains in PAU; Memory only checks memory-side legality and bank realization
 
@@ -176,6 +177,7 @@ The current map and interfaces cleanly support the intended controller flow:
 - HSU writes active `e_i` into `EI`, PAU later overwrites the same slot with `e_hat_i`
 - HSU fills the active `A0..A3` row buffer
 - PAU commits final `t_hat[i]` into `T0..T3`
+- during `KG_HSU_HASH_EK`, the Gearbox/read bridge can read `T0..T3` through the constrained HSU path for ByteEncode12 into the HSU hash path
 - Transcoder reads `t[i]` and protocol-store objects such as `rho`
 - HSU can store `H(ek)` in the protocol store without disturbing polynomial traffic
 
@@ -193,7 +195,7 @@ Practical implication:
 
 ## Summary
 
-The v0.85 Memory contract is now:
+The v0.9 Memory contract is now:
 
 - stable externally
 - smarter internally

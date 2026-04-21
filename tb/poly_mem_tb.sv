@@ -50,6 +50,8 @@ module poly_mem_tb;
   logic [3:0]                     pau_aux_rd_lane_valid_o;
   logic [3:0][W-1:0]              pau_aux_rd_data;
 
+  logic                           hsu_hash_ek_read_en;
+
   logic                           hsu_req;
   logic                           hsu_rd_en;
   logic [POLY_W-1:0]              hsu_rd_poly_id;
@@ -141,6 +143,7 @@ module poly_mem_tb;
     .pau_aux_rd_idx_o(pau_aux_rd_idx_o),
     .pau_aux_rd_lane_valid_o(pau_aux_rd_lane_valid_o),
     .pau_aux_rd_data(pau_aux_rd_data),
+    .hsu_hash_ek_read_en(hsu_hash_ek_read_en),
     .hsu_req(hsu_req),
     .hsu_rd_en(hsu_rd_en),
     .hsu_rd_poly_id(hsu_rd_poly_id),
@@ -221,6 +224,8 @@ module poly_mem_tb;
       pau_aux_wr_idx        = '0;
       pau_aux_wr_data       = '0;
 
+      hsu_hash_ek_read_en = 1'b0;
+
       hsu_req           = 1'b0;
       hsu_rd_en         = 1'b0;
       hsu_rd_poly_id    = '0;
@@ -260,7 +265,7 @@ module poly_mem_tb;
     tick();
 
     // ------------------------------------------------------------------
-    // Fixed v0.85 package slot sanity checks.
+    // Fixed max-k package slot sanity checks.
     // ------------------------------------------------------------------
     if (QREM_NUM_POLYS != 32 || QREM_MAX_K != 4)
       $fatal(1, "Unexpected poly memory package sizing constants");

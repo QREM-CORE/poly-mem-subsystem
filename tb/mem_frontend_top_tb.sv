@@ -4,7 +4,7 @@ import qrem_mem_map_pkg::*;
 import qrem_seed_map_pkg::*;
 
 module mem_frontend_top_tb;
-  // Integration TB for the v0.85 memory subsystem.
+  // Integration TB for the v0.9 memory subsystem.
   // The old mem_frontend_top block was merged into poly_mem_subsystem, but
   // this filename is kept so existing build flows still have a stable target.
 
@@ -55,6 +55,8 @@ module mem_frontend_top_tb;
   logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx_o;
   logic [3:0]                     pau_aux_rd_lane_valid_o;
   logic [3:0][W-1:0]              pau_aux_rd_data;
+
+  logic                           hsu_hash_ek_read_en;
 
   logic                           hsu_req;
   logic                           hsu_rd_en;
@@ -147,6 +149,7 @@ module mem_frontend_top_tb;
     .pau_aux_rd_idx_o(pau_aux_rd_idx_o),
     .pau_aux_rd_lane_valid_o(pau_aux_rd_lane_valid_o),
     .pau_aux_rd_data(pau_aux_rd_data),
+    .hsu_hash_ek_read_en(hsu_hash_ek_read_en),
     .hsu_req(hsu_req),
     .hsu_rd_en(hsu_rd_en),
     .hsu_rd_poly_id(hsu_rd_poly_id),
@@ -224,6 +227,8 @@ module mem_frontend_top_tb;
       pau_aux_wr_poly_id    = '0;
       pau_aux_wr_idx        = '0;
       pau_aux_wr_data       = '0;
+
+      hsu_hash_ek_read_en = 1'b0;
 
       hsu_req           = 1'b0;
       hsu_rd_en         = 1'b0;
@@ -341,6 +346,58 @@ module mem_frontend_top_tb;
     end
   endtask
 
+  task automatic read_poly_with_hsu_hash_ek(
+    input int poly_id,
+    input int idx0, input int idx1, input int idx2, input int idx3,
+    input logic [W-1:0] e0, input logic [W-1:0] e1,
+    input logic [W-1:0] e2, input logic [W-1:0] e3
+  );
+    begin
+      hsu_hash_ek_read_en = 1'b1;
+      hsu_req             = 1'b1;
+      hsu_rd_en           = 1'b1;
+      hsu_rd_poly_id      = POLY_W'(poly_id);
+      hsu_rd_idx[0]       = COEFF_W'(idx0);
+      hsu_rd_idx[1]       = COEFF_W'(idx1);
+      hsu_rd_idx[2]       = COEFF_W'(idx2);
+      hsu_rd_idx[3]       = COEFF_W'(idx3);
+      hsu_rd_lane_valid   = 4'b1111;
+      tick();
+      if (!hsu_rd_valid)
+        $fatal(1, "Expected authorized HSU hash-ek T-slot read response");
+      if (hsu_rd_poly_id_o !== POLY_W'(poly_id))
+        $fatal(1, "HSU hash-ek read tag mismatch");
+      if (hsu_rd_data[0] !== e0 || hsu_rd_data[1] !== e1 ||
+          hsu_rd_data[2] !== e2 || hsu_rd_data[3] !== e3)
+        $fatal(1, "HSU hash-ek T-slot read mismatch");
+      clear_poly_clients();
+    end
+  endtask
+
+  task automatic expect_hsu_hash_ek_read_reject(
+    input int poly_id
+  );
+    begin
+      hsu_hash_ek_read_en = 1'b1;
+      hsu_req             = 1'b1;
+      hsu_rd_en           = 1'b1;
+      hsu_rd_poly_id      = POLY_W'(poly_id);
+      hsu_rd_idx[0]       = COEFF_W'(0);
+      hsu_rd_idx[1]       = COEFF_W'(1);
+      hsu_rd_idx[2]       = COEFF_W'(2);
+      hsu_rd_idx[3]       = COEFF_W'(3);
+      hsu_rd_lane_valid   = 4'b1111;
+      #1;
+
+      if (!hsu_stall)
+        $fatal(1, "Expected unauthorized HSU hash-ek poly-id read to stall");
+      tick();
+      if (hsu_rd_valid || mem_fault_o)
+        $fatal(1, "Rejected HSU hash-ek read should not return data or fault");
+      clear_poly_clients();
+    end
+  endtask
+
   initial begin
     rst = 1'b1;
     clear_all();
@@ -352,7 +409,7 @@ module mem_frontend_top_tb;
         POLY_ID_A0 != 5 || POLY_ID_A3 != 8 ||
         POLY_ID_T0 != 9 || POLY_ID_T3 != 12 ||
         POLY_ID_WORK0 != 13 || POLY_ID_WORK18 != 31)
-      $fatal(1, "Unexpected fixed v0.85 poly-id slot layout");
+      $fatal(1, "Unexpected fixed max-k poly-id slot layout");
 
     // Prime data used by scheduler and overlap checks.
     prime_poly_with_pau(POLY_ID_S2, 0, 1, 2, 3, 16'h1200, 16'h1201, 16'h1202, 16'h1203);
@@ -498,8 +555,8 @@ module mem_frontend_top_tb;
 
     // ------------------------------------------------------------------
     // 5) Legal dual-read scheduling with per-client response routing.
-    //    HSU is not a polynomial-memory reader, so this coverage uses
-    //    PAU + Transcoder.
+    //    General dual-read coverage uses PAU + Transcoder; the constrained
+    //    HSU hash-ek T-slot read path is covered below.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
@@ -538,7 +595,8 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 6) HSU polynomial reads are unsupported and should stall cleanly.
+    // 6) HSU polynomial reads stall unless the hash-ek T-slot authorization
+    //    is active.
     // ------------------------------------------------------------------
     hsu_req           = 1'b1;
     hsu_rd_en         = 1'b1;
@@ -551,15 +609,99 @@ module mem_frontend_top_tb;
     #1;
 
     if (!hsu_stall)
-      $fatal(1, "HSU polynomial reads should stall; HSU reads seeds, not polynomial memory");
+      $fatal(1, "HSU polynomial reads should stall without hash-ek authorization");
     tick();
     if (hsu_rd_valid || mem_fault_o)
-      $fatal(1, "Unsupported HSU polynomial read should not return data or raise a memory hazard fault");
+      $fatal(1, "Unauthorized HSU polynomial read should not return data or fault");
     clear_poly_clients();
 
     // ------------------------------------------------------------------
+    // 7) KG_HSU_HASH_EK authorizes HSU/Gearbox reads from T0..T3 only.
     // ------------------------------------------------------------------
-    // 7) HSU can fill the active A row buffer while PAU consumes older data.
+    prime_poly_with_pau(POLY_ID_T0, 48, 49, 50, 51,
+                        16'h9000, 16'h9001, 16'h9002, 16'h9003);
+    prime_poly_with_pau(POLY_ID_T1, 52, 53, 54, 55,
+                        16'h9100, 16'h9101, 16'h9102, 16'h9103);
+    prime_poly_with_pau(POLY_ID_T2, 56, 57, 58, 59,
+                        16'h9204, 16'h9205, 16'h9206, 16'h9207);
+    prime_poly_with_pau(POLY_ID_T3, 60, 61, 62, 63,
+                        16'h9300, 16'h9301, 16'h9302, 16'h9303);
+
+    read_poly_with_hsu_hash_ek(POLY_ID_T0, 48, 49, 50, 51,
+                               16'h9000, 16'h9001, 16'h9002, 16'h9003);
+    read_poly_with_hsu_hash_ek(POLY_ID_T1, 52, 53, 54, 55,
+                               16'h9100, 16'h9101, 16'h9102, 16'h9103);
+    read_poly_with_hsu_hash_ek(POLY_ID_T2, 56, 57, 58, 59,
+                               16'h9204, 16'h9205, 16'h9206, 16'h9207);
+    read_poly_with_hsu_hash_ek(POLY_ID_T3, 60, 61, 62, 63,
+                               16'h9300, 16'h9301, 16'h9302, 16'h9303);
+
+    // ------------------------------------------------------------------
+    // 8) Hash-ek authorization does not make HSU a general poly reader.
+    // ------------------------------------------------------------------
+    expect_hsu_hash_ek_read_reject(POLY_ID_S2);
+    expect_hsu_hash_ek_read_reject(POLY_ID_EI);
+    expect_hsu_hash_ek_read_reject(POLY_ID_A0);
+    expect_hsu_hash_ek_read_reject(POLY_ID_WORK0);
+
+    // ------------------------------------------------------------------
+    // 9) HSU read/write mixtures remain rejected during hash-ek readout.
+    // ------------------------------------------------------------------
+    hsu_hash_ek_read_en = 1'b1;
+    hsu_req             = 1'b1;
+    hsu_rd_en           = 1'b1;
+    hsu_rd_poly_id      = POLY_W'(POLY_ID_T0);
+    hsu_rd_idx[0]       = COEFF_W'(48);
+    hsu_rd_lane_valid   = 4'b0001;
+    hsu_wr_en           = 4'b0001;
+    hsu_wr_poly_id      = POLY_W'(POLY_ID_WORK0);
+    hsu_wr_idx[0]       = COEFF_W'(64);
+    hsu_wr_data[0]      = 16'hBAD1;
+    #1;
+
+    if (!hsu_stall)
+      $fatal(1, "Expected mixed HSU hash-ek read/write request to stall");
+    tick();
+    if (hsu_rd_valid || mem_fault_o)
+      $fatal(1, "Rejected mixed HSU hash-ek request should not return data or fault");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 10) Authorized HSU T-slot read can route as the second scheduled read.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_ID_S2;
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+
+    hsu_hash_ek_read_en = 1'b1;
+    hsu_req             = 1'b1;
+    hsu_rd_en           = 1'b1;
+    hsu_rd_poly_id      = POLY_W'(POLY_ID_T0);
+    hsu_rd_idx[0]       = COEFF_W'(48);
+    hsu_rd_idx[1]       = COEFF_W'(49);
+    hsu_rd_idx[2]       = COEFF_W'(50);
+    hsu_rd_idx[3]       = COEFF_W'(51);
+    hsu_rd_lane_valid   = 4'b1111;
+    #1;
+
+    if (pau_stall || hsu_stall)
+      $fatal(1, "Expected legal PAU + authorized HSU dual-read issue");
+    tick();
+    if (!pau_rd_valid || !hsu_rd_valid)
+      $fatal(1, "Expected PAU and authorized HSU read responses together");
+    if (hsu_rd_poly_id_o !== POLY_W'(POLY_ID_T0) ||
+        hsu_rd_data[0] !== 16'h9000 || hsu_rd_data[1] !== 16'h9001 ||
+        hsu_rd_data[2] !== 16'h9002 || hsu_rd_data[3] !== 16'h9003)
+      $fatal(1, "Authorized HSU p1 read routing mismatch");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 11) HSU can fill the active A row buffer while PAU consumes older data.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
@@ -594,7 +736,7 @@ module mem_frontend_top_tb;
                        16'hA000, 16'hA001, 16'hA002, 16'hA003);
 
     // ------------------------------------------------------------------
-    // 8) Legal dual-write scheduling across two clients.
+    // 12) Legal dual-write scheduling across two clients.
     // ------------------------------------------------------------------
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
@@ -632,7 +774,7 @@ module mem_frontend_top_tb;
                        16'hB200, 16'hB201, 16'hB202, 16'hB203);
 
     // ------------------------------------------------------------------
-    // 9) Legal read/write overlap remains allowed.
+    // 13) Legal read/write overlap remains allowed.
     //    HSU contributes as the polynomial writer while Transcoder reads.
     // ------------------------------------------------------------------
     tr_req            = 1'b1;
@@ -671,7 +813,7 @@ module mem_frontend_top_tb;
                        16'hC300, 16'hC301, 16'hC302, 16'hC303);
 
     // ------------------------------------------------------------------
-    // 10) Combined read+write requests still own both ports atomically.
+    // 14) Combined read+write requests still own both ports atomically.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
@@ -735,7 +877,7 @@ module mem_frontend_top_tb;
                        16'hE500, 16'hE501, 16'hE502, 16'hE503);
 
     // ------------------------------------------------------------------
-    // 11) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
+    // 15) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
@@ -769,7 +911,7 @@ module mem_frontend_top_tb;
                       16'h6100, 16'h6101, 16'h6102, 16'h6103);
 
     // ------------------------------------------------------------------
-    // 12) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
+    // 16) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
     //    Final row commit lands in t[i].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
@@ -820,7 +962,7 @@ module mem_frontend_top_tb;
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
 
     // ------------------------------------------------------------------
-    // 13) Seed/protocol store uses semantic ID + beat mapping above Memory.
+    // 17) Seed/protocol store uses semantic ID + beat mapping above Memory.
     // ------------------------------------------------------------------
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
@@ -851,7 +993,7 @@ module mem_frontend_top_tb;
       $fatal(1, "H(ek) protocol-store readback mismatch");
 
     // ------------------------------------------------------------------
-    // 14) Illegal cross-client same-address collisions are conservatively
+    // 18) Illegal cross-client same-address collisions are conservatively
     //    rejected by the scheduler before issue; the admitted request still
     //    completes deterministically without undefined memory semantics.
     // ------------------------------------------------------------------
@@ -880,7 +1022,7 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 15) Wipe blocks all users and clears both poly + protocol storage.
+    // 19) Wipe blocks all users and clears both poly + protocol storage.
     // ------------------------------------------------------------------
     wipe_i = 1'b1;
     tick();
