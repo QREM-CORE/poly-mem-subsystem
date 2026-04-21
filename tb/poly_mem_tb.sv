@@ -1,86 +1,161 @@
 `timescale 1ns/1ps
 
+import qrem_mem_map_pkg::*;
+import qrem_seed_map_pkg::*;
+
 module poly_mem_tb;
 
-  localparam int NUM_BANKS = 4;
-  localparam int N         = 2048;
-  localparam int W         = 16;
-  localparam int ADDR_W    = $clog2(N);
-  localparam int BANK_W    = $clog2(NUM_BANKS);
+  localparam int NUM_POLYS  = 32;
+  localparam int NCOEFF     = 256;
+  localparam int W          = 16;
+  localparam int SEED_DEPTH = 32;
+  localparam int SEED_W     = 64;
+  localparam int POLY_W     = $clog2(NUM_POLYS);
+  localparam int COEFF_W    = $clog2(NCOEFF);
+  localparam int SEED_AW    = $clog2(SEED_DEPTH);
 
-  logic clk, rst_n;
+  logic clk, rst;
+  logic wipe_i, wipe_busy_o, wipe_done_o;
+  logic mem_fault_o;
+  logic [2:0] mem_fault_code_o;
 
-  // Wipe
-  logic wipe_i;
-  logic wipe_done_o;
+  logic                           pau_req;
+  logic                           pau_rd_en;
+  logic [POLY_W-1:0]              pau_rd_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_rd_idx;
+  logic [3:0]                     pau_rd_lane_valid;
+  logic [3:0]                     pau_wr_en;
+  logic [POLY_W-1:0]              pau_wr_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_wr_idx;
+  logic [3:0][W-1:0]              pau_wr_data;
+  logic                           pau_rd_valid;
+  logic [POLY_W-1:0]              pau_rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0]        pau_rd_idx_o;
+  logic [3:0]                     pau_rd_lane_valid_o;
+  logic [3:0][W-1:0]              pau_rd_data;
+  logic                           pau_stall;
 
-  // NTT
-  logic              ntt_req;
-  logic [BANK_W-1:0] ntt_bank;
-  logic              ntt_we;
-  logic [ADDR_W-1:0] ntt_addr;
-  logic [W-1:0]      ntt_wdata;
-  logic [W-1:0]      ntt_rdata;
-  logic              ntt_stall;
+  logic                           hsu_req;
+  logic                           hsu_rd_en;
+  logic [POLY_W-1:0]              hsu_rd_poly_id;
+  logic [3:0][COEFF_W-1:0]        hsu_rd_idx;
+  logic [3:0]                     hsu_rd_lane_valid;
+  logic [3:0]                     hsu_wr_en;
+  logic [POLY_W-1:0]              hsu_wr_poly_id;
+  logic [3:0][COEFF_W-1:0]        hsu_wr_idx;
+  logic [3:0][W-1:0]              hsu_wr_data;
+  logic                           hsu_rd_valid;
+  logic [POLY_W-1:0]              hsu_rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0]        hsu_rd_idx_o;
+  logic [3:0]                     hsu_rd_lane_valid_o;
+  logic [3:0][W-1:0]              hsu_rd_data;
+  logic                           hsu_stall;
 
-  // PolyMul
-  logic              pm_req;
-  logic [BANK_W-1:0] pm_bank_r0, pm_bank_r1, pm_bank_w;
-  logic [ADDR_W-1:0] pm_addr_r0, pm_addr_r1, pm_addr_w;
-  logic              pm_we;
-  logic [W-1:0]      pm_wdata;
-  logic [W-1:0]      pm_rdata_r0, pm_rdata_r1;
-  logic              pm_stall;
+  logic                           tr_req;
+  logic                           tr_rd_en;
+  logic [POLY_W-1:0]              tr_rd_poly_id;
+  logic [3:0][COEFF_W-1:0]        tr_rd_idx;
+  logic [3:0]                     tr_rd_lane_valid;
+  logic [3:0]                     tr_wr_en;
+  logic [POLY_W-1:0]              tr_wr_poly_id;
+  logic [3:0][COEFF_W-1:0]        tr_wr_idx;
+  logic [3:0][W-1:0]              tr_wr_data;
+  logic                           tr_rd_valid;
+  logic [POLY_W-1:0]              tr_rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0]        tr_rd_idx_o;
+  logic [3:0]                     tr_rd_lane_valid_o;
+  logic [3:0][W-1:0]              tr_rd_data;
+  logic                           tr_stall;
 
-  // Pack/Unpack
-  logic              pu_req;
-  logic [BANK_W-1:0] pu_bank;
-  logic              pu_we;
-  logic [ADDR_W-1:0] pu_addr;
-  logic [W-1:0]      pu_wdata;
-  logic [W-1:0]      pu_rdata;
-  logic              pu_stall;
+  logic                           hsu_seed_req;
+  logic                           hsu_seed_we;
+  logic [SEED_AW-1:0]             hsu_seed_addr;
+  logic [SEED_W-1:0]              hsu_seed_wdata;
+  logic                           hsu_seed_ready;
+  logic                           hsu_seed_rvalid;
+  logic [SEED_W-1:0]              hsu_seed_rdata;
+
+  logic                           tr_seed_req;
+  logic                           tr_seed_we;
+  logic [SEED_AW-1:0]             tr_seed_addr;
+  logic [SEED_W-1:0]              tr_seed_wdata;
+  logic                           tr_seed_ready;
+  logic                           tr_seed_rvalid;
+  logic [SEED_W-1:0]              tr_seed_rdata;
 
   poly_mem_subsystem #(
-    .NUM_BANKS(NUM_BANKS),
-    .N(N),
-    .W(W),
-    .ADDR_W(ADDR_W)
+    .NUM_POLYS  (NUM_POLYS),
+    .NCOEFF     (NCOEFF),
+    .W          (W),
+    .SEED_DEPTH (SEED_DEPTH),
+    .SEED_W     (SEED_W)
   ) dut (
     .clk(clk),
-    .rst_n(rst_n),
-
+    .rst(rst),
     .wipe_i(wipe_i),
+    .wipe_busy_o(wipe_busy_o),
     .wipe_done_o(wipe_done_o),
-
-    .ntt_req(ntt_req),
-    .ntt_bank(ntt_bank),
-    .ntt_we(ntt_we),
-    .ntt_addr(ntt_addr),
-    .ntt_wdata(ntt_wdata),
-    .ntt_rdata(ntt_rdata),
-    .ntt_stall(ntt_stall),
-
-    .pm_req(pm_req),
-    .pm_bank_r0(pm_bank_r0),
-    .pm_addr_r0(pm_addr_r0),
-    .pm_rdata_r0(pm_rdata_r0),
-    .pm_bank_r1(pm_bank_r1),
-    .pm_addr_r1(pm_addr_r1),
-    .pm_rdata_r1(pm_rdata_r1),
-    .pm_bank_w(pm_bank_w),
-    .pm_we(pm_we),
-    .pm_addr_w(pm_addr_w),
-    .pm_wdata(pm_wdata),
-    .pm_stall(pm_stall),
-
-    .pu_req(pu_req),
-    .pu_bank(pu_bank),
-    .pu_we(pu_we),
-    .pu_addr(pu_addr),
-    .pu_wdata(pu_wdata),
-    .pu_rdata(pu_rdata),
-    .pu_stall(pu_stall)
+    .mem_fault_o(mem_fault_o),
+    .mem_fault_code_o(mem_fault_code_o),
+    .pau_req(pau_req),
+    .pau_rd_en(pau_rd_en),
+    .pau_rd_poly_id(pau_rd_poly_id),
+    .pau_rd_idx(pau_rd_idx),
+    .pau_rd_lane_valid(pau_rd_lane_valid),
+    .pau_wr_en(pau_wr_en),
+    .pau_wr_poly_id(pau_wr_poly_id),
+    .pau_wr_idx(pau_wr_idx),
+    .pau_wr_data(pau_wr_data),
+    .pau_rd_valid(pau_rd_valid),
+    .pau_rd_poly_id_o(pau_rd_poly_id_o),
+    .pau_rd_idx_o(pau_rd_idx_o),
+    .pau_rd_lane_valid_o(pau_rd_lane_valid_o),
+    .pau_rd_data(pau_rd_data),
+    .pau_stall(pau_stall),
+    .hsu_req(hsu_req),
+    .hsu_rd_en(hsu_rd_en),
+    .hsu_rd_poly_id(hsu_rd_poly_id),
+    .hsu_rd_idx(hsu_rd_idx),
+    .hsu_rd_lane_valid(hsu_rd_lane_valid),
+    .hsu_wr_en(hsu_wr_en),
+    .hsu_wr_poly_id(hsu_wr_poly_id),
+    .hsu_wr_idx(hsu_wr_idx),
+    .hsu_wr_data(hsu_wr_data),
+    .hsu_rd_valid(hsu_rd_valid),
+    .hsu_rd_poly_id_o(hsu_rd_poly_id_o),
+    .hsu_rd_idx_o(hsu_rd_idx_o),
+    .hsu_rd_lane_valid_o(hsu_rd_lane_valid_o),
+    .hsu_rd_data(hsu_rd_data),
+    .hsu_stall(hsu_stall),
+    .tr_req(tr_req),
+    .tr_rd_en(tr_rd_en),
+    .tr_rd_poly_id(tr_rd_poly_id),
+    .tr_rd_idx(tr_rd_idx),
+    .tr_rd_lane_valid(tr_rd_lane_valid),
+    .tr_wr_en(tr_wr_en),
+    .tr_wr_poly_id(tr_wr_poly_id),
+    .tr_wr_idx(tr_wr_idx),
+    .tr_wr_data(tr_wr_data),
+    .tr_rd_valid(tr_rd_valid),
+    .tr_rd_poly_id_o(tr_rd_poly_id_o),
+    .tr_rd_idx_o(tr_rd_idx_o),
+    .tr_rd_lane_valid_o(tr_rd_lane_valid_o),
+    .tr_rd_data(tr_rd_data),
+    .tr_stall(tr_stall),
+    .hsu_seed_req(hsu_seed_req),
+    .hsu_seed_we(hsu_seed_we),
+    .hsu_seed_addr(hsu_seed_addr),
+    .hsu_seed_wdata(hsu_seed_wdata),
+    .hsu_seed_ready(hsu_seed_ready),
+    .hsu_seed_rvalid(hsu_seed_rvalid),
+    .hsu_seed_rdata(hsu_seed_rdata),
+    .tr_seed_req(tr_seed_req),
+    .tr_seed_we(tr_seed_we),
+    .tr_seed_addr(tr_seed_addr),
+    .tr_seed_wdata(tr_seed_wdata),
+    .tr_seed_ready(tr_seed_ready),
+    .tr_seed_rvalid(tr_seed_rvalid),
+    .tr_seed_rdata(tr_seed_rdata)
   );
 
   initial clk = 1'b0;
@@ -93,217 +168,186 @@ module poly_mem_tb;
     end
   endtask
 
-  task automatic clear_inputs;
+  task automatic clear_all;
     begin
-      wipe_i    = 1'b0;
+      wipe_i            = 1'b0;
 
-      ntt_req   = 1'b0;
-      ntt_bank  = '0;
-      ntt_we    = 1'b0;
-      ntt_addr  = '0;
-      ntt_wdata = '0;
+      pau_req           = 1'b0;
+      pau_rd_en         = 1'b0;
+      pau_rd_poly_id    = '0;
+      pau_rd_idx        = '0;
+      pau_rd_lane_valid = '0;
+      pau_wr_en         = '0;
+      pau_wr_poly_id    = '0;
+      pau_wr_idx        = '0;
+      pau_wr_data       = '0;
 
-      pm_req     = 1'b0;
-      pm_bank_r0 = '0;
-      pm_bank_r1 = '0;
-      pm_bank_w  = '0;
-      pm_we      = 1'b0;
-      pm_addr_r0 = '0;
-      pm_addr_r1 = '0;
-      pm_addr_w  = '0;
-      pm_wdata   = '0;
+      hsu_req           = 1'b0;
+      hsu_rd_en         = 1'b0;
+      hsu_rd_poly_id    = '0;
+      hsu_rd_idx        = '0;
+      hsu_rd_lane_valid = '0;
+      hsu_wr_en         = '0;
+      hsu_wr_poly_id    = '0;
+      hsu_wr_idx        = '0;
+      hsu_wr_data       = '0;
 
-      pu_req   = 1'b0;
-      pu_bank  = '0;
-      pu_we    = 1'b0;
-      pu_addr  = '0;
-      pu_wdata = '0;
-    end
-  endtask
+      tr_req            = 1'b0;
+      tr_rd_en          = 1'b0;
+      tr_rd_poly_id     = '0;
+      tr_rd_idx         = '0;
+      tr_rd_lane_valid  = '0;
+      tr_wr_en          = '0;
+      tr_wr_poly_id     = '0;
+      tr_wr_idx         = '0;
+      tr_wr_data        = '0;
 
-  task automatic reset_all;
-    begin
-      clear_inputs();
-      rst_n = 1'b0;
-      repeat (3) tick();
-      rst_n = 1'b1;
-      repeat (2) tick();
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Write a pattern into one bank using NTT writes
-  // ------------------------------------------------------------
-  task automatic write_ramp(input int bank, input int count);
-    int i;
-    begin
-      for (i = 0; i < count; i++) begin
-        @(posedge clk);
-        ntt_req   <= 1'b1;
-        ntt_bank  <= BANK_W'(bank);
-        ntt_we    <= 1'b1;
-        ntt_addr  <= ADDR_W'(i);
-        ntt_wdata <= W'(i*3 + 7);
-      end
-      @(posedge clk);
-      ntt_req <= 1'b0;
-      ntt_we  <= 1'b0;
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Read back one location and verify 1-cycle latency
-  // ------------------------------------------------------------
-  task automatic check_ntt_read_latency(
-    input int bank,
-    input int addr,
-    input logic [W-1:0] exp_data
-  );
-    begin
-      // Issue read request at cycle T
-      @(posedge clk);
-      ntt_req  <= 1'b1;
-      ntt_bank <= BANK_W'(bank);
-      ntt_we   <= 1'b0;
-      ntt_addr <= ADDR_W'(addr);
-
-      // At T itself, data is not yet the returned value we want
-      #1;
-
-      // At T+1, returned data should appear
-      @(posedge clk);
-      #1;
-      if (ntt_rdata !== exp_data) begin
-        $fatal(1, "NTT read latency check failed: bank=%0d addr=%0d got=%0h exp=%0h",
-               bank, addr, ntt_rdata, exp_data);
-      end
-
-      // Clear request
-      @(posedge clk);
-      ntt_req <= 1'b0;
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Port A battle: NTT vs PM write vs PU on same bank
-  // Expect NTT wins, PM and PU stall
-  // ------------------------------------------------------------
-  task automatic port_a_priority_battle(input int bank);
-    begin
-      @(posedge clk);
-      ntt_req   <= 1'b1;
-      ntt_bank  <= BANK_W'(bank);
-      ntt_we    <= 1'b1;
-      ntt_addr  <= ADDR_W'(10);
-      ntt_wdata <= 16'h1111;
-
-      pm_req     <= 1'b1;
-      pm_bank_w  <= BANK_W'(bank);
-      pm_we      <= 1'b1;
-      pm_addr_w  <= ADDR_W'(11);
-      pm_wdata   <= 16'h2222;
-      pm_bank_r0 <= BANK_W'((bank+1) % NUM_BANKS);
-      pm_addr_r0 <= ADDR_W'(0);
-      pm_bank_r1 <= BANK_W'((bank+2) % NUM_BANKS);
-      pm_addr_r1 <= ADDR_W'(0);
-
-      pu_req   <= 1'b1;
-      pu_bank  <= BANK_W'(bank);
-      pu_we    <= 1'b1;
-      pu_addr  <= ADDR_W'(12);
-      pu_wdata <= 16'h3333;
-
-      #1;
-      if (ntt_stall !== 1'b0)
-        $fatal(1, "Expected NTT to win Port A arbitration");
-      if (pm_stall !== 1'b1)
-        $fatal(1, "Expected PM write to stall under Port A conflict");
-      if (pu_stall !== 1'b1)
-        $fatal(1, "Expected PU to stall under Port A conflict");
-
-      @(posedge clk);
-      clear_inputs();
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // PolyMul same-bank dual-read conflict
-  // Expect full stall
-  // ------------------------------------------------------------
-  task automatic force_same_bank_read_conflict(input int bank);
-    begin
-      @(posedge clk);
-      pm_req     <= 1'b1;
-      pm_bank_r0 <= BANK_W'(bank);
-      pm_addr_r0 <= ADDR_W'(1);
-      pm_bank_r1 <= BANK_W'(bank);
-      pm_addr_r1 <= ADDR_W'(2);
-      pm_we      <= 1'b0;
-
-      #1;
-      if (!pm_stall)
-        $fatal(1, "Expected pm_stall on same-bank dual-read conflict!");
-
-      @(posedge clk);
-      clear_inputs();
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Wipe test: trigger wipe and wait for done
-  // ------------------------------------------------------------
-  task automatic run_wipe;
-    begin
-      @(posedge clk);
-      wipe_i <= 1'b1;
-
-      @(posedge clk);
-      wipe_i <= 1'b0;
-
-      wait (wipe_done_o == 1'b1);
-      @(posedge clk);
-    end
-  endtask
-
-  // ------------------------------------------------------------
-  // Verify random-ish sample addresses are all zero after wipe
-  // Since subsystem exposes NTT/PU reads on Port A, use NTT reads.
-  // ------------------------------------------------------------
-  task automatic verify_wipe_integrity;
-    logic [W-1:0] rd;
-    begin
-      // Sample several addresses across all banks
-      check_ntt_read_latency(0, 0,     16'h0000);
-      check_ntt_read_latency(1, 5,     16'h0000);
-      check_ntt_read_latency(2, 37,    16'h0000);
-      check_ntt_read_latency(3, 99,    16'h0000);
-      check_ntt_read_latency(0, 255,   16'h0000);
-      check_ntt_read_latency(1, 511,   16'h0000);
-      check_ntt_read_latency(2, 1023,  16'h0000);
-      check_ntt_read_latency(3, 2047,  16'h0000);
+      hsu_seed_req      = 1'b0;
+      hsu_seed_we       = 1'b0;
+      hsu_seed_addr     = '0;
+      hsu_seed_wdata    = '0;
+      tr_seed_req       = 1'b0;
+      tr_seed_we        = 1'b0;
+      tr_seed_addr      = '0;
+      tr_seed_wdata     = '0;
     end
   endtask
 
   initial begin
-    reset_all();
+    rst = 1'b1;
+    clear_all();
+    repeat (2) tick();
+    rst = 1'b0;
+    tick();
 
-    // 1) preload some data so wipe actually matters
-    write_ramp(0, 32);
-    write_ramp(1, 16);
+    // ------------------------------------------------------------------
+    // Package helper / alias sanity checks.
+    // ------------------------------------------------------------------
+    if (QREM_NUM_POLYS != 32 || QREM_MAX_K != 4)
+      $fatal(1, "Unexpected poly memory package sizing constants");
+    if (qrem_mem_map_pkg::poly_id_a(0, 0) != POLY_ID_A_00 ||
+        qrem_mem_map_pkg::poly_id_a(2, 3) != POLY_ID_A_23)
+      $fatal(1, "A-matrix poly-id helper mismatch");
+    if (qrem_mem_map_pkg::poly_id_s(1) != POLY_ID_S_1 ||
+        qrem_mem_map_pkg::poly_id_e(2) != POLY_ID_E_2 ||
+        qrem_mem_map_pkg::poly_id_t(3) != POLY_ID_T_3 ||
+        qrem_mem_map_pkg::poly_id_temp(1) != POLY_ID_TEMP_1)
+      $fatal(1, "Vector/scratch poly-id helper mismatch");
+    if (POLY_ID_S_HAT_2 != POLY_ID_S_2 || POLY_ID_E_HAT_1 != POLY_ID_E_1 ||
+        POLY_ID_T_HAT_3 != POLY_ID_T_3 ||
+        POLY_ID_A_STREAM_SCRATCH != POLY_ID_TEMP_0)
+      $fatal(1, "Semantic poly-id aliases must preserve stable slots");
 
-    // 2) verify 1-cycle latency on readback
-    check_ntt_read_latency(0, 4, 16'(4*3 + 7));   // 19
-    check_ntt_read_latency(1, 3, 16'(3*3 + 7));   // 16
+    if (qrem_seed_map_pkg::seed_base_addr(SEED_ID_D) != SEED_AW'(SEED_BASE_D) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_Z) != SEED_AW'(SEED_BASE_Z) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_M) != SEED_AW'(SEED_BASE_M) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_RHO) != SEED_AW'(SEED_BASE_RHO) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_SIGMA) != SEED_AW'(SEED_BASE_SIGMA) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_HEK) != SEED_AW'(SEED_BASE_HEK) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_SS) != SEED_AW'(SEED_BASE_SS) ||
+        qrem_seed_map_pkg::seed_base_addr(SEED_ID_TMP) != SEED_AW'(SEED_BASE_TMP))
+      $fatal(1, "Seed/protocol base helper mismatch");
+    if (qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd2) != SEED_AW'(SEED_BASE_RHO + 2) ||
+        qrem_seed_map_pkg::seed_word_addr(SEED_ID_HEK, 2'd3) != SEED_AW'(SEED_BASE_HEK + 3))
+      $fatal(1, "Seed/protocol word helper mismatch");
 
-    // 3) high-stress Port A arbitration
-    port_a_priority_battle(2);
+    // ------------------------------------------------------------------
+    // Protocol-store smoke test using semantic helper-generated addresses.
+    // ------------------------------------------------------------------
+    hsu_seed_req   = 1'b1;
+    hsu_seed_we    = 1'b1;
+    hsu_seed_addr  = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd0);
+    hsu_seed_wdata = 64'hCAFE_F00D_0000_0001;
+    tr_seed_req    = 1'b1;
+    tr_seed_we     = 1'b1;
+    tr_seed_addr   = qrem_seed_map_pkg::seed_word_addr(SEED_ID_HEK, 2'd3);
+    tr_seed_wdata  = 64'h55AA_1234_DEAD_BEEF;
+    tick();
+    clear_all();
 
-    // 4) same-bank PolyMul read conflict
-    force_same_bank_read_conflict(0);
+    hsu_seed_req  = 1'b1;
+    hsu_seed_addr = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd0);
+    tr_seed_req   = 1'b1;
+    tr_seed_addr  = qrem_seed_map_pkg::seed_word_addr(SEED_ID_HEK, 2'd3);
+    tick();
+    clear_all();
 
-    // 5) wipe and verify memory is really zero
-    run_wipe();
-    verify_wipe_integrity();
+    if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'hCAFE_F00D_0000_0001)
+      $fatal(1, "RHO protocol-store readback mismatch");
+    if (!tr_seed_rvalid || tr_seed_rdata !== 64'h55AA_1234_DEAD_BEEF)
+      $fatal(1, "H(ek) protocol-store readback mismatch");
+
+    // ------------------------------------------------------------------
+    // Simple poly-memory smoke using semantic KeyGen slots.
+    // ------------------------------------------------------------------
+    hsu_req           = 1'b1;
+    hsu_wr_en         = 4'b1111;
+    hsu_wr_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    hsu_wr_idx[0]     = COEFF_W'(0);
+    hsu_wr_idx[1]     = COEFF_W'(1);
+    hsu_wr_idx[2]     = COEFF_W'(2);
+    hsu_wr_idx[3]     = COEFF_W'(3);
+    hsu_wr_data[0]    = 16'h1100;
+    hsu_wr_data[1]    = 16'h1101;
+    hsu_wr_data[2]    = 16'h1102;
+    hsu_wr_data[3]    = 16'h1103;
+    tick();
+    clear_all();
+
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+    tick();
+    if (!pau_rd_valid)
+      $fatal(1, "Expected readback from semantic S slot");
+    if (pau_rd_data[0] !== 16'h1100 || pau_rd_data[1] !== 16'h1101 ||
+        pau_rd_data[2] !== 16'h1102 || pau_rd_data[3] !== 16'h1103)
+      $fatal(1, "Semantic S slot readback mismatch");
+    clear_all();
+
+    // ------------------------------------------------------------------
+    // Wipe still clears both polynomial memory and protocol store.
+    // ------------------------------------------------------------------
+    wipe_i = 1'b1;
+    tick();
+    wipe_i = 1'b0;
+    if (!wipe_busy_o)
+      $fatal(1, "Expected wipe_busy_o to assert during wipe");
+    wait (wipe_done_o == 1'b1);
+    tick();
+    if (wipe_busy_o)
+      $fatal(1, "Expected wipe_busy_o to drop after wipe completion");
+
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+    tick();
+    if (!pau_rd_valid)
+      $fatal(1, "Expected post-wipe read response");
+    if (pau_rd_data[0] !== 16'h0000 || pau_rd_data[1] !== 16'h0000 ||
+        pau_rd_data[2] !== 16'h0000 || pau_rd_data[3] !== 16'h0000)
+      $fatal(1, "Polynomial wipe failed");
+    clear_all();
+
+    hsu_seed_req  = 1'b1;
+    hsu_seed_addr = qrem_seed_map_pkg::seed_word_addr(SEED_ID_RHO, 2'd0);
+    tick();
+    clear_all();
+    if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h0)
+      $fatal(1, "Protocol-store wipe failed");
+
+    if (mem_fault_o || mem_fault_code_o !== 3'b000)
+      $fatal(1, "Unexpected memory fault during smoke test");
 
     $display("TB PASS");
     $finish;
