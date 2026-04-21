@@ -23,6 +23,8 @@ jobs:
 
       build_tools_ref: 'xilinx_fpga_build'
 
+      synth_targets: 'fpga'
+
       enable_synth: true
       enable_lint: true
       enable_verilator: true
