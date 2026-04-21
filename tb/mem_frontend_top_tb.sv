@@ -402,8 +402,16 @@ module mem_frontend_top_tb;
     rst = 1'b1;
     clear_all();
     repeat (2) tick();
+    if (hsu_seed_ready || tr_seed_ready ||
+        hsu_seed_rvalid || tr_seed_rvalid ||
+        hsu_seed_rdata !== '0 || tr_seed_rdata !== '0)
+      $fatal(1, "Seed ports must be not-ready and data-zero during reset");
+
     rst = 1'b0;
     tick();
+    if (hsu_seed_rvalid || tr_seed_rvalid ||
+        hsu_seed_rdata !== '0 || tr_seed_rdata !== '0)
+      $fatal(1, "Seed read data should be zero when rvalid is low");
 
     if (POLY_ID_S0 != 0 || POLY_ID_S3 != 3 || POLY_ID_EI != 4 ||
         POLY_ID_A0 != 5 || POLY_ID_A3 != 8 ||

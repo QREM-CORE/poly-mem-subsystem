@@ -537,6 +537,12 @@ and protocol metadata.
     Transcoder-side access port.
   \item Independent from polynomial-memory arbitration.
   \item Zeroed by the wipe FSM during the \texttt{WIPE\_SEED} phase.
+  \item At the \texttt{poly\_mem\_subsystem} boundary, seed ports report
+    not-ready during reset or wipe, and read data is meaningful only when the
+    matching \texttt{*\_seed\_rvalid} signal is asserted.
+  \item The raw RAM primitive does not reset memory contents or read-data
+    registers; this preserves BRAM-friendly inference, while the top-level
+    boundary drives idle read data to zero.
 \end{itemize}
 
 At the bridge boundary above Memory, seed/protocol accesses are best

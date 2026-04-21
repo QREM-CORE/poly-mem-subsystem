@@ -55,6 +55,13 @@ Address conversion:
 
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
 
+Boundary behavior:
+
+- `*_seed_ready` is low during reset or wipe.
+- `*_seed_rvalid` asserts one cycle after an accepted read.
+- `*_seed_rdata` is driven to zero whenever `*_seed_rvalid` is low.
+- The raw seed RAM does not reset contents or read-data registers; the wipe FSM is the zeroization mechanism.
+
 ## 3. Internal Scheduling Model
 
 ### 3.1 High-level rule
@@ -159,6 +166,7 @@ Seed/protocol store timing:
 - accepted read in cycle `n`
 - read response in cycle `n+1`
 - write commits on the acceptance edge
+- reset/wipe deasserts `*_seed_ready`; idle read data is zeroed at the subsystem boundary
 
 ## 7. Polynomial Map
 

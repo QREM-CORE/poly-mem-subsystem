@@ -261,8 +261,16 @@ module poly_mem_tb;
     rst = 1'b1;
     clear_all();
     repeat (2) tick();
+    if (hsu_seed_ready || tr_seed_ready ||
+        hsu_seed_rvalid || tr_seed_rvalid ||
+        hsu_seed_rdata !== '0 || tr_seed_rdata !== '0)
+      $fatal(1, "Seed ports must be not-ready and data-zero during reset");
+
     rst = 1'b0;
     tick();
+    if (hsu_seed_rvalid || tr_seed_rvalid ||
+        hsu_seed_rdata !== '0 || tr_seed_rdata !== '0)
+      $fatal(1, "Seed read data should be zero when rvalid is low");
 
     // ------------------------------------------------------------------
     // Fixed max-k package slot sanity checks.

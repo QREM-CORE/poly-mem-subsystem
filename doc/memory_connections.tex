@@ -593,6 +593,13 @@ These ports are \textbf{completely independent} of the PAU/HSU/Transcoder
 polynomial scheduler. They can be used \emph{concurrently} with polynomial-bank
 traffic.
 
+During reset or wipe, both seed/protocol ports report not-ready. Seed read data
+is valid-qualified: the corresponding \texttt{*\_seed\_rvalid} signal asserts
+one cycle after an accepted read, and \texttt{*\_seed\_rdata} is driven to zero
+when no valid read response is present. The underlying RAM primitive does not
+reset its raw read-data registers; the wipe FSM is responsible for clearing
+stored protocol data.
+
 \subsection{Who Drives the Seed Port?}
 
 The memory subsystem does not enforce semantic ownership. The physical seed

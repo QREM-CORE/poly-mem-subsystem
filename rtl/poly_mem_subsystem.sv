@@ -20,8 +20,9 @@
  *
  * Notes:
  *   - Reset is active-high and synchronous.
- *   - During wipe, all polynomial clients stall and both seed ports report
- *     not-ready.
+ *   - During reset or wipe, both seed ports report not-ready. Seed read data
+ *     is meaningful only when the matching *_seed_rvalid is asserted.
+ *   - During wipe, all polynomial clients stall.
  *   - Memory exposes a small internal-only control/status sideband for the
  *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
  */
@@ -768,21 +769,24 @@ module poly_mem_subsystem #(
   logic [SEED_W-1:0] hsu_seed_rdata_int, tr_seed_rdata_int;
   logic              hsu_seed_read_fire, tr_seed_read_fire;
   logic              hsu_seed_read_fire_q, tr_seed_read_fire_q;
+  logic              seed_access_ready;
 
   logic               seed_a_we_mux, seed_b_we_mux;
   logic [SEED_AW-1:0] seed_a_addr_mux, seed_b_addr_mux;
   logic [SEED_W-1:0]  seed_a_wdata_mux, seed_b_wdata_mux;
 
+  assign seed_access_ready = ~rst && ~wipe_active;
+
   always_comb begin
-    seed_a_we_mux    = hsu_seed_we && hsu_seed_req && ~wipe_active;
+    seed_a_we_mux    = seed_access_ready && hsu_seed_we && hsu_seed_req;
     seed_a_addr_mux  = hsu_seed_addr;
     seed_a_wdata_mux = hsu_seed_wdata;
 
-    seed_b_we_mux    = tr_seed_we && tr_seed_req && ~wipe_active;
+    seed_b_we_mux    = seed_access_ready && tr_seed_we && tr_seed_req;
     seed_b_addr_mux  = tr_seed_addr;
     seed_b_wdata_mux = tr_seed_wdata;
 
-    if (wipe_state_q == WIPE_SEED) begin
+    if (!rst && (wipe_state_q == WIPE_SEED)) begin
       seed_a_we_mux    = 1'b1;
       seed_a_addr_mux  = wipe_seed_q;
       seed_a_wdata_mux = '0;
@@ -793,10 +797,10 @@ module poly_mem_subsystem #(
     end
   end
 
-  assign hsu_seed_ready     = ~wipe_active;
-  assign tr_seed_ready      = ~wipe_active;
-  assign hsu_seed_read_fire = ~wipe_active && hsu_seed_req && ~hsu_seed_we;
-  assign tr_seed_read_fire  = ~wipe_active && tr_seed_req  && ~tr_seed_we;
+  assign hsu_seed_ready     = seed_access_ready;
+  assign tr_seed_ready      = seed_access_ready;
+  assign hsu_seed_read_fire = seed_access_ready && hsu_seed_req && ~hsu_seed_we;
+  assign tr_seed_read_fire  = seed_access_ready && tr_seed_req  && ~tr_seed_we;
 
   seed_ram #(
     .DEPTH  (SEED_DEPTH),
@@ -815,10 +819,10 @@ module poly_mem_subsystem #(
     .b_rdata(tr_seed_rdata_int)
   );
 
-  assign hsu_seed_rdata  = hsu_seed_rdata_int;
-  assign tr_seed_rdata   = tr_seed_rdata_int;
   assign hsu_seed_rvalid = hsu_seed_read_fire_q;
   assign tr_seed_rvalid  = tr_seed_read_fire_q;
+  assign hsu_seed_rdata  = hsu_seed_read_fire_q ? hsu_seed_rdata_int : '0;
+  assign tr_seed_rdata   = tr_seed_read_fire_q  ? tr_seed_rdata_int  : '0;
 
   // --------------------------------------------------------------------------
   // Final stall generation

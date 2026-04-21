@@ -111,6 +111,12 @@ The intended contract above Memory is:
 
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
 
+At the Memory boundary, both seed/protocol ports report not-ready during reset
+or wipe. Read data is valid-qualified: `*_seed_rvalid` asserts one cycle after
+an accepted read, and `*_seed_rdata` is driven to zero whenever `*_seed_rvalid`
+is low. The raw RAM primitive does not reset its read-data registers so FPGA
+BRAM inference remains clean; storage zeroization is handled by the wipe FSM.
+
 ## RTL Modules
 
 | Module | Description |

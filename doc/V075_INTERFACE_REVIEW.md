@@ -47,6 +47,11 @@ Above Memory, bridges should use semantic:
 
 with:
 
+- `*_seed_ready` low during reset or wipe
+- `*_seed_rvalid` asserted one cycle after an accepted read
+- `*_seed_rdata` zero when `*_seed_rvalid` is low
+- raw RAM read-data registers left reset-free for BRAM-friendly inference; wipe clears stored protocol data
+
 `seed_addr = seed_base_addr(seed_id) + seed_idx`
 
 ## What Changed Internally
