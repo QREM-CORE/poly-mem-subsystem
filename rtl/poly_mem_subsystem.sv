@@ -12,6 +12,8 @@
  *     two legal client requests per cycle when hazards permit.
  *   - If any client presents a combined read+write request, that client owns
  *     both internal ports atomically for the cycle.
+ *   - HSU polynomial access is write-only in this repo phase; `hsu_rd_*`
+ *     signals are kept only for top-level interface stability.
  *   - The seed / protocol store remains independent from polynomial
  *     arbitration and exposes one dedicated HSU-side port and one dedicated
  *     Transcoder-side port.
@@ -257,14 +259,18 @@ module poly_mem_subsystem #(
   logic pau_rd_req, pau_wr_req, pau_both_req, pau_single_req;
   logic hsu_rd_req, hsu_wr_req, hsu_both_req, hsu_single_req;
   logic tr_rd_req, tr_wr_req, tr_both_req, tr_single_req;
+  logic hsu_poly_rd_unsupported;
 
   assign pau_rd_req    = pau_req && pau_rd_en && (|pau_rd_lane_valid);
   assign pau_wr_req    = pau_req && (|pau_wr_en);
   assign pau_both_req  = pau_rd_req && pau_wr_req;
   assign pau_single_req = (pau_rd_req || pau_wr_req) && ~pau_both_req;
 
-  assign hsu_rd_req    = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
-  assign hsu_wr_req    = hsu_req && (|hsu_wr_en);
+  // HSU consumes polynomial memory only as a writer. Any asserted poly-read
+  // request is treated as unsupported and must retry as a seed/protocol read.
+  assign hsu_poly_rd_unsupported = hsu_req && hsu_rd_en && (|hsu_rd_lane_valid);
+  assign hsu_rd_req    = 1'b0;
+  assign hsu_wr_req    = hsu_req && ~hsu_poly_rd_unsupported && (|hsu_wr_en);
   assign hsu_both_req  = hsu_rd_req && hsu_wr_req;
   assign hsu_single_req = (hsu_rd_req || hsu_wr_req) && ~hsu_both_req;
 
@@ -734,7 +740,9 @@ module poly_mem_subsystem #(
         else pau_stall = 1'b1;
       end
 
-      if (hsu_single_req) begin
+      if (hsu_poly_rd_unsupported) begin
+        hsu_stall = 1'b1;
+      end else if (hsu_single_req) begin
         if (p0_sel_owner == OWNER_HSU) hsu_stall = ~p0_ready;
         else if (p1_sel_owner == OWNER_HSU) hsu_stall = ~p1_ready;
         else hsu_stall = 1'b1;

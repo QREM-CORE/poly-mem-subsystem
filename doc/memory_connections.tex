@@ -441,9 +441,11 @@ bridge (external to this repository). The Poly Stream Writer:
   \item Presents a single 4-lane write request to the memory subsystem.
 \end{enumerate}
 
-The HSU is \textbf{primarily a writer}. It may also read (the
-\texttt{hsu\_rd\_en} / \texttt{hsu\_rd\_idx} signals exist), but in
-typical ML-KEM operation, the HSU's sampling phase is write-only.
+The HSU is a \textbf{polynomial-memory writer}. The \texttt{hsu\_rd\_*}
+signals remain at the top-level interface for stability, but in the current
+Memory implementation HSU polynomial reads are intentionally unsupported.
+HSU reads protocol objects such as seeds through the dedicated
+\texttt{seed\_*} port instead.
 
 \subsubsection{Which Polynomial Slots}
 

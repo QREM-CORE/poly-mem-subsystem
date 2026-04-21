@@ -315,6 +315,8 @@ module mem_frontend_top_tb;
 
     // ------------------------------------------------------------------
     // 1) Legal dual-read scheduling with per-client response routing.
+    //    HSU is not a polynomial-memory reader, so this coverage uses
+    //    PAU + Transcoder.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
@@ -325,34 +327,54 @@ module mem_frontend_top_tb;
     pau_rd_idx[3]     = COEFF_W'(3);
     pau_rd_lane_valid = 4'b1111;
 
-    hsu_req           = 1'b1;
-    hsu_rd_en         = 1'b1;
-    hsu_rd_poly_id    = POLY_W'(6);
-    hsu_rd_idx[0]     = COEFF_W'(12);
-    hsu_rd_idx[1]     = COEFF_W'(13);
-    hsu_rd_idx[2]     = COEFF_W'(14);
-    hsu_rd_idx[3]     = COEFF_W'(15);
-    hsu_rd_lane_valid = 4'b1111;
+    tr_req            = 1'b1;
+    tr_rd_en          = 1'b1;
+    tr_rd_poly_id     = POLY_W'(6);
+    tr_rd_idx[0]      = COEFF_W'(12);
+    tr_rd_idx[1]      = COEFF_W'(13);
+    tr_rd_idx[2]      = COEFF_W'(14);
+    tr_rd_idx[3]      = COEFF_W'(15);
+    tr_rd_lane_valid  = 4'b1111;
     #1;
 
     if (pau_stall || hsu_stall || tr_stall)
       $fatal(1, "Expected legal dual-read issue without stalls");
     tick();
 
-    if (!pau_rd_valid || !hsu_rd_valid || tr_rd_valid)
-      $fatal(1, "Expected PAU and HSU read responses in the same cycle");
-    if (pau_rd_poly_id_o !== POLY_W'(2) || hsu_rd_poly_id_o !== POLY_W'(6))
+    if (!pau_rd_valid || !tr_rd_valid || hsu_rd_valid)
+      $fatal(1, "Expected PAU and Transcoder read responses in the same cycle");
+    if (pau_rd_poly_id_o !== POLY_W'(2) || tr_rd_poly_id_o !== POLY_W'(6))
       $fatal(1, "Dual-read response routing tagged the wrong client");
     if (pau_rd_data[0] !== 16'h1200 || pau_rd_data[1] !== 16'h1201 ||
         pau_rd_data[2] !== 16'h1202 || pau_rd_data[3] !== 16'h1203)
       $fatal(1, "PAU dual-read data mismatch");
-    if (hsu_rd_data[0] !== 16'h6600 || hsu_rd_data[1] !== 16'h6601 ||
-        hsu_rd_data[2] !== 16'h6602 || hsu_rd_data[3] !== 16'h6603)
-      $fatal(1, "HSU dual-read data mismatch");
+    if (tr_rd_data[0] !== 16'h6600 || tr_rd_data[1] !== 16'h6601 ||
+        tr_rd_data[2] !== 16'h6602 || tr_rd_data[3] !== 16'h6603)
+      $fatal(1, "Transcoder dual-read data mismatch");
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 2) Legal dual-write scheduling across two clients.
+    // 2) HSU polynomial reads are unsupported and should stall cleanly.
+    // ------------------------------------------------------------------
+    hsu_req           = 1'b1;
+    hsu_rd_en         = 1'b1;
+    hsu_rd_poly_id    = POLY_W'(2);
+    hsu_rd_idx[0]     = COEFF_W'(0);
+    hsu_rd_idx[1]     = COEFF_W'(1);
+    hsu_rd_idx[2]     = COEFF_W'(2);
+    hsu_rd_idx[3]     = COEFF_W'(3);
+    hsu_rd_lane_valid = 4'b1111;
+    #1;
+
+    if (!hsu_stall)
+      $fatal(1, "HSU polynomial reads should stall; HSU reads seeds, not polynomial memory");
+    tick();
+    if (hsu_rd_valid || mem_fault_o)
+      $fatal(1, "Unsupported HSU polynomial read should not return data or raise a memory hazard fault");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 3) Legal dual-write scheduling across two clients.
     // ------------------------------------------------------------------
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
@@ -388,44 +410,45 @@ module mem_frontend_top_tb;
     read_poly_with_pau(11, 16, 17, 18, 19, 16'hB200, 16'hB201, 16'hB202, 16'hB203);
 
     // ------------------------------------------------------------------
-    // 3) Legal read/write overlap remains allowed.
+    // 4) Legal read/write overlap remains allowed.
+    //    HSU contributes as the polynomial writer while Transcoder reads.
     // ------------------------------------------------------------------
-    hsu_req           = 1'b1;
-    hsu_rd_en         = 1'b1;
-    hsu_rd_poly_id    = POLY_W'(2);
-    hsu_rd_idx[0]     = COEFF_W'(0);
-    hsu_rd_idx[1]     = COEFF_W'(1);
-    hsu_rd_idx[2]     = COEFF_W'(2);
-    hsu_rd_idx[3]     = COEFF_W'(3);
-    hsu_rd_lane_valid = 4'b1111;
+    tr_req            = 1'b1;
+    tr_rd_en          = 1'b1;
+    tr_rd_poly_id     = POLY_W'(2);
+    tr_rd_idx[0]      = COEFF_W'(0);
+    tr_rd_idx[1]      = COEFF_W'(1);
+    tr_rd_idx[2]      = COEFF_W'(2);
+    tr_rd_idx[3]      = COEFF_W'(3);
+    tr_rd_lane_valid  = 4'b1111;
 
-    tr_req        = 1'b1;
-    tr_wr_en      = 4'b1111;
-    tr_wr_poly_id = POLY_W'(12);
-    tr_wr_idx[0]  = COEFF_W'(20);
-    tr_wr_idx[1]  = COEFF_W'(21);
-    tr_wr_idx[2]  = COEFF_W'(22);
-    tr_wr_idx[3]  = COEFF_W'(23);
-    tr_wr_data[0] = 16'hC300;
-    tr_wr_data[1] = 16'hC301;
-    tr_wr_data[2] = 16'hC302;
-    tr_wr_data[3] = 16'hC303;
+    hsu_req        = 1'b1;
+    hsu_wr_en      = 4'b1111;
+    hsu_wr_poly_id = POLY_W'(12);
+    hsu_wr_idx[0]  = COEFF_W'(20);
+    hsu_wr_idx[1]  = COEFF_W'(21);
+    hsu_wr_idx[2]  = COEFF_W'(22);
+    hsu_wr_idx[3]  = COEFF_W'(23);
+    hsu_wr_data[0] = 16'hC300;
+    hsu_wr_data[1] = 16'hC301;
+    hsu_wr_data[2] = 16'hC302;
+    hsu_wr_data[3] = 16'hC303;
     #1;
 
     if (hsu_stall || tr_stall)
       $fatal(1, "Expected legal read/write overlap without stalls");
     tick();
-    if (!hsu_rd_valid)
-      $fatal(1, "Expected HSU read response during read/write overlap");
-    if (hsu_rd_data[0] !== 16'h1200 || hsu_rd_data[1] !== 16'h1201 ||
-        hsu_rd_data[2] !== 16'h1202 || hsu_rd_data[3] !== 16'h1203)
-      $fatal(1, "HSU overlap read data mismatch");
+    if (!tr_rd_valid)
+      $fatal(1, "Expected Transcoder read response during read/write overlap");
+    if (tr_rd_data[0] !== 16'h1200 || tr_rd_data[1] !== 16'h1201 ||
+        tr_rd_data[2] !== 16'h1202 || tr_rd_data[3] !== 16'h1203)
+      $fatal(1, "Transcoder overlap read data mismatch");
     clear_poly_clients();
 
     read_poly_with_pau(12, 20, 21, 22, 23, 16'hC300, 16'hC301, 16'hC302, 16'hC303);
 
     // ------------------------------------------------------------------
-    // 4) Combined read+write requests still own both ports atomically.
+    // 5) Combined read+write requests still own both ports atomically.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
@@ -487,7 +510,7 @@ module mem_frontend_top_tb;
     read_poly_with_pau(14, 28, 29, 30, 31, 16'hE500, 16'hE501, 16'hE502, 16'hE503);
 
     // ------------------------------------------------------------------
-    // 5) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
+    // 6) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
@@ -521,7 +544,7 @@ module mem_frontend_top_tb;
                       16'h6100, 16'h6101, 16'h6102, 16'h6103);
 
     // ------------------------------------------------------------------
-    // 6) Semantic KeyGen placement: e[i] overwritten in place with e_hat[i].
+    // 7) Semantic KeyGen placement: e[i] overwritten in place with e_hat[i].
     //    Final row commit lands in t[i].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
@@ -572,7 +595,7 @@ module mem_frontend_top_tb;
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
 
     // ------------------------------------------------------------------
-    // 7) Seed/protocol store uses semantic ID + beat mapping above Memory.
+    // 8) Seed/protocol store uses semantic ID + beat mapping above Memory.
     // ------------------------------------------------------------------
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
@@ -603,7 +626,7 @@ module mem_frontend_top_tb;
       $fatal(1, "H(ek) protocol-store readback mismatch");
 
     // ------------------------------------------------------------------
-    // 8) Illegal cross-client same-address collisions are conservatively
+    // 9) Illegal cross-client same-address collisions are conservatively
     //    rejected by the scheduler before issue; the admitted request still
     //    completes deterministically without undefined memory semantics.
     // ------------------------------------------------------------------
@@ -632,7 +655,7 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 9) Wipe blocks all users and clears both poly + protocol storage.
+    // 10) Wipe blocks all users and clears both poly + protocol storage.
     // ------------------------------------------------------------------
     wipe_i = 1'b1;
     tick();
