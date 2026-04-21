@@ -21,6 +21,8 @@ jobs:
       # Your comma-separated top modules for the Yosys synthesis matrix
       top_modules: 'poly_mem_subsystem'
 
+      build_tools_ref: 'xilinx_fpga_build'
+
       enable_synth: true
       enable_lint: true
       enable_verilator: true
