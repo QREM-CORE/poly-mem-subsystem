@@ -221,7 +221,6 @@ The A-matrix region stays fully resident-capable, while `POLY_ID_A_STREAM_SCRATC
 | `rtl/qrem_mem_map_pkg.sv` | Polynomial map package |
 | `rtl/qrem_seed_map_pkg.sv` | Protocol-store map package |
 | `rtl/mem_arbiter.sv` | Legacy helper retained in repo |
-| `rtl/delay_n.sv` | Shared utility delay line |
 
 ## 11. Test Coverage
 

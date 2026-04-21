@@ -109,7 +109,6 @@ The intended contract above Memory is:
 | `rtl/qrem_mem_map_pkg.sv` | Stable polynomial slot map plus semantic helpers/aliases |
 | `rtl/qrem_seed_map_pkg.sv` | Stable protocol-store map plus semantic address helpers |
 | `rtl/mem_arbiter.sv` | Legacy strict-priority helper retained in the repo; current top-level scheduling is in `poly_mem_subsystem.sv` |
-| `rtl/delay_n.sv` | Shared utility delay line |
 
 ## Hazard Rules
 
