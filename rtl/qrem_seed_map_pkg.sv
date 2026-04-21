@@ -3,7 +3,10 @@ package qrem_seed_map_pkg;
   // ---------------------------------------------------------------------------
   // Seed / protocol store sizing
   // ---------------------------------------------------------------------------
-  // v0.75 treats the seed store as a lightweight RAM for short protocol values.
+  // v0.75 treats this as a lightweight protocol store for short fixed-size
+  // ML-KEM objects. It remains address-based inside Memory, while bridges above
+  // Memory may present semantic access as {seed_id, seed_idx}.
+  //
   // A 32 x 64-bit layout is enough to keep the common 256-bit ML-KEM variables
   // resident at the same time without forcing immediate overwrite/reload churn.
   //
@@ -30,14 +33,15 @@ package qrem_seed_map_pkg;
   } seed_id_e;
 
   // ---------------------------------------------------------------------------
-  // 256-bit variable base addresses
+  // 256-bit protocol-object base addresses
   // ---------------------------------------------------------------------------
   // These are base WORD addresses, not single-entry IDs.
   // The controller / bridges should treat each item as a 4-word region:
   //   [BASE + 0] .. [BASE + 3]
   //
   // The names intentionally mix "seed" and "protocol" concepts because the
-  // store is used for more than just fresh randomness in v0.75.
+  // store is used for more than just fresh randomness in v0.75:
+  //   d, z, m, rho, sigma, H(ek), ss, and temporary protocol values.
   //
   // Why bases instead of IDs:
   // - several values span multiple 64-bit words
@@ -71,6 +75,15 @@ package qrem_seed_map_pkg;
         SEED_ID_TMP  : seed_base_addr = QREM_SEED_AW'(SEED_BASE_TMP);
         default      : seed_base_addr = '0;
       endcase
+    end
+  endfunction
+
+  function automatic logic [QREM_SEED_AW-1:0] seed_word_addr(
+    input seed_id_e id,
+    input logic [$clog2(QREM_SEED_BEATS)-1:0] beat
+  );
+    begin
+      seed_word_addr = seed_base_addr(id) + QREM_SEED_AW'(beat);
     end
   endfunction
 

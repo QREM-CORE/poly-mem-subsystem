@@ -76,10 +76,11 @@ This document describes the polynomial memory subsystem designed for the
 QREM ML-KEM (FIPS~203) hardware accelerator. The subsystem provides
 four-coefficient parallel access per cycle using a four-bank dual-port
 memory architecture with conflict-free memory interface (CMI) bank
-mapping. A centralized priority arbiter multiplexes three system
-clients---the Polynomial Arithmetic Unit (PAU), Hash Sampling Unit (HSU),
-and Transcoder---onto the shared memory plane, while a dedicated dual-port
-seed/protocol store and a security-wipe finite state machine complete the design. The
+mapping. A deterministic internal two-port scheduler maps up to two legal
+client requests per cycle onto the shared polynomial banks while preserving
+strict client priority and atomic combined read/write phases. A dedicated
+dual-port seed/protocol store and a security-wipe finite state machine
+complete the design. The
 architecture follows the Memory Subsystem block described in
 \emph{``Highly-Efficient Hardware Architecture for ML-KEM PQC Standard''}
 by H.~Jung, Q.~D.~Truong, and H.~Lee (IEEE OJCAS, 2025).
@@ -185,18 +186,18 @@ encapsulates all memory resources and arbitration logic.
 \node[block, fill=green!10, right=1.2cm of hsu] (tr)
   {Transcoder\\(Lowest)};
 
-% Arbiter
-\node[block, fill=red!10, minimum width=4cm]
-  (arb) at ([yshift=-0.6cm]outer.north) {mem\_arbiter\\Strict Priority};
+% Scheduler
+\node[block, fill=red!10, minimum width=4.5cm]
+  (arb) at ([yshift=-0.6cm]outer.north) {2-Port Scheduler\\PAU$>$HSU$>$Transcoder};
 
 % Request mux
 \node[block, fill=gray!10, minimum width=4cm, below=0.4cm of arb]
-  (mux) {Request Mux / Wipe Mux};
+  (mux) {Pair-Legal Issue / Wipe Mux};
 
 % Poly wrapper
 \node[block, fill=cyan!10, minimum width=5.5cm, minimum height=1.5cm,
       below=0.5cm of mux]
-  (wrap) {poly\_mem\_wrapper\_4bank\\CMI Bank Mapping\\Conflict Detection};
+  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\CMI + Hazard Checks};
 
 % Banks
 \node[block, fill=cyan!25, minimum width=1cm, below=0.5cm of wrap,
@@ -369,15 +370,16 @@ This is the single top-level module that integrates all sub-components.
 Its responsibilities are:
 
 \begin{enumerate}
-  \item \textbf{Arbitration:} Instantiates \texttt{mem\_arbiter} to
-    resolve contention among PAU, HSU, and Transcoder.
-  \item \textbf{Request multiplexing:} Routes the winning client's
-    4-lane vector request to \texttt{poly\_mem\_wrapper\_4bank}.
+  \item \textbf{2-port scheduling:} Selects the highest-priority
+    schedulable request first, then admits a second request only if the
+    pair is legal after bank/address analysis.
+  \item \textbf{Request multiplexing:} Routes up to two admitted 4-lane
+    vector requests to \texttt{poly\_mem\_wrapper\_4bank}.
   \item \textbf{Wipe multiplexing:} During a security wipe, overrides
     client requests with wipe-generated zero-write commands.
   \item \textbf{Response routing:} Tags each accepted read with an
-    \emph{owner ID} and, one cycle later, delivers the response
-    exclusively to the originating client.
+    \emph{owner ID} and, one cycle later, delivers up to two read
+    responses to their originating clients.
   \item \textbf{Seed port:} Provides an independent read/write path
     to \texttt{seed\_ram}, unaffected by polynomial arbitration.
   \item \textbf{Security wipe FSM:} Sequences through WIPE\_POLY
@@ -409,6 +411,8 @@ Every polynomial-memory client port presents an identical set of signals
 \texttt{*\_wr\_data}       & in  & $4\times16$ & Write data \\
 \texttt{*\_rd\_valid}      & out & 1        & Read response valid (1 cycle later) \\
 \texttt{*\_rd\_poly\_id\_o} & out & 5       & Returned polynomial ID for accepted read \\
+\texttt{*\_rd\_idx\_o}     & out & $4\times8$ & Returned read coefficient indices \\
+\texttt{*\_rd\_lane\_valid\_o} & out & 4    & Returned read lane valids \\
 \texttt{*\_rd\_data}       & out & $4\times16$ & Read data \\
 \texttt{*\_stall}          & out & 1        & Client must hold its request \\
 \bottomrule
@@ -444,7 +448,7 @@ consecutive groups of~4 indices per cycle, which always map to distinct
 banks under the CMI scheme, so no write conflicts can occur.
 
 % ────────────────────────────────────────────────────────────
-\subsection{\texttt{mem\_arbiter} --- Priority Arbitrator}
+\subsection{\texttt{mem\_arbiter} --- Legacy Priority Helper}
 
 A purely combinational module implementing strict fixed-priority
 arbitration:
@@ -457,9 +461,9 @@ arbitration:
   \item Else if \texttt{tr\_req\_i} $\rightarrow$ grant Transcoder.
 \end{enumerate}
 
-The winning client sees downstream stall if the memory wrapper reports
-\texttt{ready\_o}~$=$~0 (bank conflict). Losing clients always have
-\texttt{stall}~$=$~1.
+The current \texttt{poly\_mem\_subsystem} no longer instantiates this
+module directly. The active top-level scheduler is implemented inline so it
+can reason about pair legality before admitting a second request.
 
 \textbf{Why strict priority?} The PAU sits on the critical path of NTT
 and CWM operations, which dominate ML-KEM's cycle count. Guaranteeing
@@ -471,23 +475,22 @@ starvation is not a practical concern.
 \subsection{\texttt{poly\_mem\_wrapper\_4bank} --- 4-Bank Polynomial
 Memory}
 
-Implements Poly Port~A (read path) and Poly Port~B (write path) to the
-four banked \texttt{poly\_ram\_bank} instances.
+Implements two symmetric generic vector ports over the four banked
+\texttt{poly\_ram\_bank} instances. Generic Port~0 binds to physical
+RAM Port~A and Generic Port~1 binds to physical RAM Port~B, but either
+generic port may issue a legal read vector or write vector in a cycle.
 
 \begin{itemize}
   \item \textbf{Bank mapping:} Uses \texttt{cmi\_bank\_idx()} to compute
     the target bank and \texttt{cmi\_bank\_addr()} for the local address.
-  \item \textbf{Conflict detection:} Performs 6~pairwise comparisons
-    among active read lanes and 6~among active write lanes. If any
-    same-bank collision is found, \texttt{ready\_o}~$=$~0 and the
-    request is rejected. Read-vs-write same-bank is \emph{not} a
-    conflict because they use different RAM ports.
-  \item \textbf{Request routing:} Reads are routed to Port~A of the
-    target bank; writes to Port~B.
-  \item \textbf{Response pipeline:} A single stage of registers captures
-    the accepted read's metadata (polynomial~ID, lane indices, bank
-    tags). On the next cycle, the response combinator reorders bank
-    outputs into lane order using the saved bank tags.
+  \item \textbf{Conflict detection:} Rejects same-request lane conflicts
+    and cross-port same-address hazards. Read/read, write/write, and
+    read/write overlap are all legal when final bank/address usage is safe.
+  \item \textbf{Request routing:} Each admitted generic port is routed to
+    the matching physical RAM port.
+  \item \textbf{Response pipeline:} Independent metadata pipelines track
+    accepted reads on both generic ports so up to two read responses can be
+    reordered and returned one cycle later.
 \end{itemize}
 
 % ────────────────────────────────────────────────────────────
@@ -581,18 +584,18 @@ during NTT, sampling, encoding, and key generation.
 \toprule
 \textbf{Cycle} & \textbf{Read Path} & \textbf{Write Path} \\
 \midrule
-0 & Client asserts \texttt{req}, \texttt{rd\_en}, \texttt{rd\_idx}
-  & Client asserts \texttt{wr\_en}, \texttt{wr\_idx}, \texttt{wr\_data} \\
-  & Arbiter grants; wrapper accepts (\texttt{ready\_o}=1)
-  & Write applied to Port~B on clock edge \\
-  & Port~A address applied to bank RAM
+0 & One or two clients assert admitted read requests
+  & One or two clients assert admitted write requests \\
+  & Scheduler selects legal request(s); wrapper accepts
+  & Accepted writes commit on the cycle-0 clock edge \\
+  & Physical RAM port address is applied
   & \\
 \midrule
-1 & Bank RAM outputs data on \texttt{a\_rdata}
+1 & Bank RAM outputs data on the physical RAM read port(s)
   & Write data visible to subsequent reads \\
-  & Wrapper presents \texttt{rd\_valid\_o}=1
+  & Wrapper presents up to two \texttt{rd\_valid\_o} responses
   & \\
-  & \texttt{poly\_mem\_subsystem} routes to originating client
+  & \texttt{poly\_mem\_subsystem} routes each response to its originating client
   & \\
 \bottomrule
 \end{tabular}
@@ -602,9 +605,9 @@ during NTT, sampling, encoding, and key generation.
 \section{Conflict Detection}
 \label{sec:conflict}
 
-Bank conflicts occur when two active read lanes (or two active write
-lanes) target the same bank in the same cycle. The wrapper performs
-$\binom{4}{2} = 6$ pairwise comparisons for reads and 6 for writes:
+Same-request conflicts occur when two active lanes in one admitted vector
+target the same bank in an illegal way. The wrapper performs the required
+pairwise comparisons within each vector:
 
 \begin{lstlisting}[style=sv, caption={Conflict detection excerpt.}]
 if (rd_lane_valid_i[0] && rd_lane_valid_i[1]
@@ -621,12 +624,10 @@ When a conflict is detected:
   \item The client must hold its request until \texttt{stall} is released.
 \end{itemize}
 
-Read-vs-write to the same bank is \textbf{not} automatically a conflict because
-reads use Port~A and writes use Port~B of the dual-port RAM. However,
-\textbf{same-address read+write is explicitly forbidden} in the current
-v0.75-alignment pass, and same-address write+write is also forbidden. These
-conditions raise \texttt{mem\_fault\_o} with an encoded
-\texttt{mem\_fault\_code\_o}.
+Read-vs-write to the same bank is \textbf{not} automatically a conflict.
+However, same-address read+write and same-address write+write are forbidden,
+and same-request lane conflicts are rejected. At the top level, the scheduler
+also filters unsafe cross-client pairings before issue.
 
 % ════════════════════════════════════════════════════════════════
 \section{Security Wipe}
@@ -674,11 +675,12 @@ make run_mem_frontend_top_tb SIM=verilator
 \textbf{Testbench} & \textbf{Verified Functionality} \\
 \midrule
 \texttt{poly\_mem\_tb}
-  & PAU smoke test: write/read, seed store, wipe \\
+  & Map/helper smoke test, protocol-store ID+beat mapping, wipe \\
 \texttt{mem\_frontend\_top\_tb}
-  & Full integration: all 3 clients, arbitration, isolation, wipe \\
+  & Full integration: legal dual-read / dual-write / read-write overlap,
+    combined ownership, KeyGen placements, protocol store, wipe \\
 \texttt{poly\_mem\_wrapper\_4bank\_tb}
-  & CMI mapping, conflict detection, read reorder \\
+  & Wrapper legal overlap, same-address hazards, same-request conflicts \\
 \texttt{mem\_arbiter\_tb}
   & Priority ordering, stall propagation \\
 \texttt{seed\_ram\_tb}
@@ -728,11 +730,12 @@ The QREM polynomial memory subsystem provides:
   \item A \textbf{four-bank dual-port polynomial memory} with CMI
     conflict-free bank mapping ensuring zero-conflict NTT butterfly
     access.
-  \item A \textbf{strict-priority split-plane arbiter} (PAU~$>$~HSU~$>$~Transcoder)
-    granting one read owner and one write owner per cycle, with atomic
+  \item A \textbf{strict-priority 2-port scheduler} (PAU~$>$~HSU~$>$~Transcoder)
+    issuing up to two legal single-sided requests per cycle, with atomic
     combined read+write ownership.
   \item \textbf{Deterministic 1-cycle read latency} with tagged response
-    routing that guarantees each client only receives its own read data.
+    routing that guarantees each client only receives its own read data,
+    with up to two read responses in a cycle.
   \item A \textbf{dedicated dual-port seed/protocol store} on independent
     HSU and Transcoder ports.
   \item A \textbf{hardware security-wipe FSM} clearing all 32~polynomials

@@ -111,9 +111,10 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \end{table}
 
 \begin{itemize}
-  \item Each \textbf{polynomial bank} is a dual-port RAM: Port~A is used
-    for reads, Port~B for writes. This allows a simultaneous read and
-    write to the same bank in one cycle.
+  \item Each \textbf{polynomial bank} is a dual-port RAM. The wrapper binds
+    generic Port~0 to physical Port~A and generic Port~1 to physical Port~B,
+    and either generic port may be a legal read vector or write vector in a
+    cycle.
   \item The \textbf{seed RAM} is a lightweight true-dual-port synchronous
     RAM with one HSU-side access port and one Transcoder-side access port.
 \end{itemize}
@@ -147,17 +148,17 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \node[client, fill=green!12, right=1.5cm of hsu] (tr) {Transcoder};
 \node[client, fill=blue!10, right=1.5cm of tr] (ext) {HSU / TR\\Seed Bridge};
 
-% Arbiter
+% Scheduler
 \node[logic, fill=red!8, minimum width=5cm, below=1.0cm of hsu] (arb)
-  {mem\_arbiter\\PAU\,$>$\,HSU\,$>$\,Transcoder};
+  {2-Port Scheduler\\PAU\,$>$\,HSU\,$>$\,Transcoder};
 
 % Request mux
 \node[logic, minimum width=5cm, below=0.6cm of arb] (mux)
-  {Request Mux (poly\_mem\_subsystem)};
+  {Pair-Legal Issue Mux};
 
 % Wrapper
 \node[logic, fill=cyan!6, minimum width=5cm, below=0.6cm of mux]
-  (wrap) {poly\_mem\_wrapper\_4bank\\CMI bank mapping};
+  (wrap) {poly\_mem\_wrapper\_4bank\\2 Generic Ports\\CMI + Hazard Checks};
 
 % Banks
 \node[bank, below=0.8cm of wrap, xshift=-3cm] (b0) {Bank\,0\\Port A / B};
@@ -221,9 +222,9 @@ The memory subsystem contains exactly \textbf{five RAM instances}
 \end{tikzpicture}
 \caption{Connection topology. Solid arrows show the request path;
 dashed arrows show read-response return and wipe override paths.
-All three clients share the same 4 polynomial banks through the
-arbiter. The seed RAM sits on a separate dual-port path and is not
-arbitrated with polynomial traffic.}
+All three clients share the same 4 polynomial banks through the internal
+2-port scheduler. The seed RAM sits on a separate dual-port path and is
+not arbitrated with polynomial traffic.}
 \label{fig:phy}
 \end{figure}
 
@@ -231,8 +232,9 @@ arbitrated with polynomial traffic.}
 
 There is \textbf{no per-client bank partitioning}. All three
 clients---PAU, HSU, and Transcoder---share all four polynomial banks
-through a single arbitrated path. The subsystem grants one
-\textbf{read owner} and one \textbf{write owner} per cycle; the winner's
+through the same scheduler and wrapper. The subsystem may admit up to two
+legal single-sided requests in a cycle; if a client presents a combined
+read+write request, it owns both internal ports atomically. Every issued
 request is routed through the \emph{same}
 \texttt{poly\_mem\_wrapper\_4bank} instance, which applies the same CMI
 bank-mapping function regardless of which client is requesting.
@@ -252,15 +254,13 @@ initiation to response:
     \texttt{*\_req}, \texttt{*\_poly\_id}, read/write indices, and data
     signals.
 
-  \item \textbf{Arbiter resolves priority.} \texttt{mem\_arbiter}
-    evaluates all three \texttt{*\_req} signals combinationally and
-    produces one-hot grants. Lower-priority requestors are immediately
-    stalled.
+  \item \textbf{Scheduler resolves priority.} The subsystem chooses the
+    highest-priority schedulable request first, then admits a second
+    request only if the pair is legal after bank/address analysis.
 
-  \item \textbf{Request mux selects winner.} Inside
-    \texttt{poly\_mem\_subsystem}, a combinational mux forwards the
-    winning client's signals to the internal memory bus
-    (\texttt{poly\_*\_arb}).
+  \item \textbf{Issue mux selects admitted requests.} Inside
+    \texttt{poly\_mem\_subsystem}, combinational issue logic forwards up
+    to two admitted client requests to the internal wrapper ports.
 
   \item \textbf{Wipe mux overrides (if active).} If the wipe FSM is
     active, its internally generated zero-write command replaces the
@@ -273,25 +273,22 @@ initiation to response:
       \text{addr}[i] &= \texttt{cmi\_bank\_addr}(\text{poly\_id},\;\text{idx}[i])
     \end{align*}
 
-  \item \textbf{Conflict check.} The wrapper performs 6~pairwise
-    bank-tag comparisons among active read lanes and 6~among active
-    write lanes. If any collision is found, \texttt{ready\_o}~$= 0$
-    and the request is rejected (the arbiter propagates a stall to the
-    winning client).
+  \item \textbf{Conflict check.} The wrapper rejects same-request lane
+    conflicts and same-address cross-port hazards. At the top level, the
+    scheduler already filters unsafe cross-client pairings before issue.
 
   \item \textbf{Bank access.} If no conflict:
     \begin{itemize}
-      \item \textbf{Reads} $\to$ Port~A address of the target bank is
-        set. Data appears on \texttt{a\_rdata} one cycle later.
-      \item \textbf{Writes} $\to$ Port~B write-enable, address, and
-        data are applied on the same clock edge.
+      \item \textbf{Reads} $\to$ the admitted generic port drives the
+        selected physical RAM port. Data appears one cycle later.
+      \item \textbf{Writes} $\to$ the admitted generic port drives
+        write-enable, address, and data on the same clock edge.
     \end{itemize}
 
-  \item \textbf{Response routing.} One cycle after a read is accepted,
-    \texttt{poly\_mem\_subsystem} uses the saved \texttt{rd\_owner\_q}
-    tag to route the wrapper's read response exclusively to the client
-    that initiated the read. The other two clients see
-    \texttt{*\_rd\_valid}~$= 0$.
+  \item \textbf{Response routing.} One cycle after accepted reads,
+    \texttt{poly\_mem\_subsystem} uses saved owner tags to route up to
+    two read responses back to the clients that initiated them. Other
+    clients see \texttt{*\_rd\_valid}~$= 0$.
 \end{enumerate}
 
 % ════════════════════════════════════════════════════════════════
@@ -635,12 +632,12 @@ Transcoder designers.
 Module       & \texttt{poly\_ram\_bank}     & \texttt{seed\_ram} \\
 Width        & 16 bits                       & 64 bits \\
 Depth        & 2048 entries each             & 32 entries \\
-Ports        & Dual-port (A=read, B=write)   & Dual-port (HSU + Transcoder) \\
+Ports        & Dual-port (physical A/B under 2-port scheduler) & Dual-port (HSU + Transcoder) \\
 Bank mapping & CMI bit-pair-sum              & Direct address \\
 Arbitrated   & Yes (PAU$>$HSU$>$Transcoder)  & No (independent port) \\
 Data stored  & Polynomial coefficients       & Seeds, hash state,
                protocol metadata \\
-Wipe phase   & \texttt{WIPE\_POLY} (2048 cy) & \texttt{WIPE\_SEED} (16 cy) \\
+Wipe phase   & \texttt{WIPE\_POLY} (2048 cy) & \texttt{WIPE\_SEED} (32 cy) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -737,10 +734,10 @@ W (zeroes all entries) \\
   \item The seed RAM is \textbf{not} part of the polynomial bank array.
     It is a separate, independent dual-port memory with no polynomial-bank
     arbiter involvement.
-  \item The polynomial subsystem supports one \textbf{read owner} and one
-    \textbf{write owner} per cycle. A read-only client can therefore overlap
-    with a write-only client, while a combined read+write request owns both
-    planes atomically.
+  \item The polynomial subsystem supports up to two \textbf{legal issued
+    requests} per cycle. They may be read/read, write/write, or read/write
+    when safe, while a combined read+write request owns both internal ports
+    atomically.
   \item The wipe FSM is the only entity that accesses \textbf{both}
     memory types, and it does so sequentially (polynomial banks first,
     then seed RAM).
