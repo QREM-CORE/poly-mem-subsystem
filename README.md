@@ -121,7 +121,6 @@ The intended contract above Memory is:
 | `rtl/seed_ram.sv` | Dual-port protocol store RAM |
 | `rtl/qrem_mem_map_pkg.sv` | Stable fixed polynomial slot constants |
 | `rtl/qrem_seed_map_pkg.sv` | Stable protocol-store map plus semantic address helpers |
-| `rtl/delay_n.sv` | Shared utility delay line |
 
 ## Hazard Rules
 

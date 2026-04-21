@@ -234,7 +234,6 @@ Examples:
 | `rtl/seed_ram.sv` | Dual-port protocol store RAM |
 | `rtl/qrem_mem_map_pkg.sv` | Polynomial map package |
 | `rtl/qrem_seed_map_pkg.sv` | Protocol-store map package |
-| `rtl/delay_n.sv` | Shared utility delay line |
 
 ## 11. Test Coverage
 
