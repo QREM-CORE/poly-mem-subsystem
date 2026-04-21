@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-`poly_mem_subsystem.sv` is the authoritative top-level Memory module for the QREM v0.75 direction.
+`poly_mem_subsystem.sv` is the authoritative top-level Memory module for the QREM v0.85 direction.
 
 It owns:
 
@@ -32,6 +32,10 @@ Meaning:
 - HSU polynomial read signals are retained for port stability, but HSU
   polynomial access is write-only; HSU reads protocol objects through the
   seed/protocol store
+- PAU has an additional auxiliary descriptor channel. When PAU primary and
+  auxiliary descriptors are both valid and pair-legal, PAU owns both internal
+  memory ports for that cycle. This is Memory-side scheduling support only;
+  PAU-side CMI remains in PAU.
 
 ### 2.2 Seed / protocol store contract
 
@@ -77,6 +81,12 @@ When a client presents read+write together:
 
 - both internal ports belong to that client for the cycle
 - lower-priority clients stall
+
+When PAU presents primary and auxiliary descriptors together:
+
+- both internal ports belong to PAU if the pair is legal
+- the pair may be read/read, read/write, or write/write
+- lower-priority clients stall behind the PAU-owned pair
 
 ### 3.3 Determinism
 
@@ -154,26 +164,22 @@ Stable numeric layout from `qrem_mem_map_pkg.sv`:
 
 | Region | Base | Count |
 |---|---:|---:|
-| `A` | 0 | 16 |
-| `S` | 16 | 4 |
-| `E` | 20 | 4 |
-| `T` | 24 | 4 |
-| `TEMP` | 28 | 4 |
+| `S0..S3` | 0 | 4 |
+| `EI` | 4 | 1 |
+| `A0..A3` | 5 | 4 |
+| `T0..T3` | 9 | 4 |
+| `WORK0..WORK18` | 13 | 19 |
 
-Helper functions:
+The package intentionally defines only fixed constants. Memory does not take
+`k` as an input and does not compute runtime placement. The controller chooses
+which subset of `S0..S3`, `A0..A3`, and `T0..T3` is active for `k=2..4`.
 
-- `poly_id_a(row, col)`
-- `poly_id_s(j)`
-- `poly_id_e(i)`
-- `poly_id_t(i)`
-- `poly_id_temp(slot)`
+Rewrite semantics:
 
-Semantic aliases:
-
-- `POLY_ID_S_HAT_*` -> same numeric slots as `POLY_ID_S_*`
-- `POLY_ID_E_HAT_*` -> same numeric slots as `POLY_ID_E_*`
-- `POLY_ID_T_HAT_*` -> same numeric slots as `POLY_ID_T_*`
-- `POLY_ID_A_STREAM_SCRATCH` -> `TEMP_0`
+- `s_j` is overwritten in the same `S*` slot as `s_hat_j`
+- `e_i` is overwritten in `POLY_ID_EI` as `e_hat_i`
+- `A*` row-buffer slots may hold `A_hat[i][j]`
+- `T*` slots hold final `t_hat_i`
 
 ## 8. Seed / Protocol Map
 
@@ -207,13 +213,12 @@ The current map and interfaces support the intended controller flow without over
 
 Examples:
 
-- HSU writes `s[j]`, PAU later overwrites it in place as `s_hat[j]`
-- HSU writes `e[i]`, PAU later overwrites it in place as `e_hat[i]`
-- PAU writes final `t_hat[i]` into `t[i]`
+- HSU writes `s_j` into `POLY_ID_S0..POLY_ID_S3`; PAU later overwrites the same slot as `s_hat_j`
+- HSU writes the active row error into `POLY_ID_EI`; PAU later overwrites it as `e_hat_i`
+- HSU fills the active A row buffer in `POLY_ID_A0..POLY_ID_A3`
+- PAU writes final `t_hat_i` into `POLY_ID_T0..POLY_ID_T3`
 - Transcoder reads `t[i]` and protocol-store objects for egress
 - `rho`, `sigma`, `H(ek)`, `ss`, and temporary protocol values all fit the same protocol-store model
-
-The A-matrix region stays fully resident-capable, while `POLY_ID_A_STREAM_SCRATCH` gives a clean streamed-scratch option.
 
 ## 10. RTL Summary
 
@@ -232,8 +237,8 @@ The A-matrix region stays fully resident-capable, while `POLY_ID_A_STREAM_SCRATC
 | Testbench | Main checks |
 |---|---|
 | `tb/poly_mem_wrapper_4bank_tb.sv` | legal dual-read, dual-write, read/write overlap, same-address RW, same-address WW, same-request lane conflicts |
-| `tb/poly_mem_tb.sv` | map helper correctness, protocol-store ID+beat mapping, wipe |
-| `tb/mem_frontend_top_tb.sv` | dual-read routing, dual-write scheduling, read/write overlap, combined atomicity, KeyGen slot placements, protocol-store concurrency, wipe |
+| `tb/poly_mem_tb.sv` | fixed map constants, protocol-store ID+beat mapping, wipe |
+| `tb/mem_frontend_top_tb.sv` | PAU-owned dual-port phases, dual-read routing, dual-write scheduling, read/write overlap, combined atomicity, KeyGen slot placements, protocol-store concurrency, wipe |
 
 Expected output: `TB PASS`
 

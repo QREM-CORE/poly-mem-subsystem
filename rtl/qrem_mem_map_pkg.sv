@@ -6,140 +6,59 @@ package qrem_mem_map_pkg;
   localparam int QREM_MAX_K = 4;
   localparam int QREM_NUM_POLYS = 32;
 
-  // Each polynomial occupies 64 rows per bank (256 coeffs / 4 banks)
+  // Each polynomial occupies 64 rows per bank (256 coeffs / 4 banks).
   localparam int QREM_POLY_ROWS_PER_BANK = 64;
 
   // ============================================================
-  // Base allocations
+  // v0.85 fixed controller-visible polynomial slots
   // ============================================================
-  // A matrix: worst-case ML-KEM-1024 uses k=4 => 4x4 = 16 polys
-  localparam int POLY_ID_A_BASE    = 0;   // 0..15
-  localparam int POLY_ID_A_COUNT   = QREM_MAX_K * QREM_MAX_K;
+  // Memory does not take k as an input and does not compute dynamic placement.
+  // The controller chooses which subset of these fixed IDs is active for
+  // k=2, k=3, or k=4.
 
-  // Secret vector s: up to 4 polys
-  localparam int POLY_ID_S_BASE    = 16;  // 16..19
-  localparam int POLY_ID_S_COUNT   = QREM_MAX_K;
+  // Secret vector storage. PAU overwrites these same slots with s_hat in place.
+  localparam int POLY_ID_S0 = 0;
+  localparam int POLY_ID_S1 = 1;
+  localparam int POLY_ID_S2 = 2;
+  localparam int POLY_ID_S3 = 3;
 
-  // Error vector e: up to 4 polys
-  localparam int POLY_ID_E_BASE    = 20;  // 20..23
-  localparam int POLY_ID_E_COUNT   = QREM_MAX_K;
+  // Active row-error scratch. PAU overwrites this same slot with e_hat_i.
+  localparam int POLY_ID_EI = 4;
 
-  // Output / t vector / result region
-  localparam int POLY_ID_T_BASE    = 24;  // 24..27
-  localparam int POLY_ID_T_COUNT   = QREM_MAX_K;
+  // Active A row buffer. These slots may hold A_hat[i][j] for the active row.
+  localparam int POLY_ID_A0 = 5;
+  localparam int POLY_ID_A1 = 6;
+  localparam int POLY_ID_A2 = 7;
+  localparam int POLY_ID_A3 = 8;
 
-  // Temp / scratch / intermediate storage
-  localparam int POLY_ID_TEMP_BASE = 28;  // 28..31
-  localparam int POLY_ID_TEMP_COUNT = QREM_MAX_K;
+  // Final t vector storage. These slots hold final t_hat_i values.
+  localparam int POLY_ID_T0 = 9;
+  localparam int POLY_ID_T1 = 10;
+  localparam int POLY_ID_T2 = 11;
+  localparam int POLY_ID_T3 = 12;
 
-  // ============================================================
-  // Explicit slot aliases
-  // ============================================================
-  localparam int POLY_ID_A_00 = 0;
-  localparam int POLY_ID_A_01 = 1;
-  localparam int POLY_ID_A_02 = 2;
-  localparam int POLY_ID_A_03 = 3;
+  // Generic controller-visible work region.
+  localparam int POLY_ID_WORK_BASE  = 13;
+  localparam int POLY_ID_WORK_COUNT = 19;
 
-  localparam int POLY_ID_A_10 = 4;
-  localparam int POLY_ID_A_11 = 5;
-  localparam int POLY_ID_A_12 = 6;
-  localparam int POLY_ID_A_13 = 7;
-
-  localparam int POLY_ID_A_20 = 8;
-  localparam int POLY_ID_A_21 = 9;
-  localparam int POLY_ID_A_22 = 10;
-  localparam int POLY_ID_A_23 = 11;
-
-  localparam int POLY_ID_A_30 = 12;
-  localparam int POLY_ID_A_31 = 13;
-  localparam int POLY_ID_A_32 = 14;
-  localparam int POLY_ID_A_33 = 15;
-
-  localparam int POLY_ID_S_0 = 16;
-  localparam int POLY_ID_S_1 = 17;
-  localparam int POLY_ID_S_2 = 18;
-  localparam int POLY_ID_S_3 = 19;
-
-  localparam int POLY_ID_E_0 = 20;
-  localparam int POLY_ID_E_1 = 21;
-  localparam int POLY_ID_E_2 = 22;
-  localparam int POLY_ID_E_3 = 23;
-
-  localparam int POLY_ID_T_0 = 24;
-  localparam int POLY_ID_T_1 = 25;
-  localparam int POLY_ID_T_2 = 26;
-  localparam int POLY_ID_T_3 = 27;
-
-  localparam int POLY_ID_TEMP_0 = 28;
-  localparam int POLY_ID_TEMP_1 = 29;
-  localparam int POLY_ID_TEMP_2 = 30;
-  localparam int POLY_ID_TEMP_3 = 31;
-
-  // ============================================================
-  // Semantic aliases for controller-visible placement intent
-  // ============================================================
-  // Secret generation and row-error generation are intentionally in-place:
-  // HSU writes s[j] / e[i], then PAU overwrites the same slot with s_hat[j]
-  // / e_hat[i] after NTT. The numeric IDs remain unchanged.
-  localparam int POLY_ID_S_HAT_0 = POLY_ID_S_0;
-  localparam int POLY_ID_S_HAT_1 = POLY_ID_S_1;
-  localparam int POLY_ID_S_HAT_2 = POLY_ID_S_2;
-  localparam int POLY_ID_S_HAT_3 = POLY_ID_S_3;
-
-  localparam int POLY_ID_E_HAT_0 = POLY_ID_E_0;
-  localparam int POLY_ID_E_HAT_1 = POLY_ID_E_1;
-  localparam int POLY_ID_E_HAT_2 = POLY_ID_E_2;
-  localparam int POLY_ID_E_HAT_3 = POLY_ID_E_3;
-
-  localparam int POLY_ID_T_HAT_0 = POLY_ID_T_0;
-  localparam int POLY_ID_T_HAT_1 = POLY_ID_T_1;
-  localparam int POLY_ID_T_HAT_2 = POLY_ID_T_2;
-  localparam int POLY_ID_T_HAT_3 = POLY_ID_T_3;
-
-  // Full A residency remains available in POLY_ID_A_*.
-  // TEMP_0 is a dedicated semantic alias for streamed / transient A_hat usage
-  // when a controller prefers scratch placement instead of full residency.
-  localparam int POLY_ID_A_STREAM_SCRATCH = POLY_ID_TEMP_0;
-
-  function automatic int unsigned poly_id_a(
-    input int unsigned row,
-    input int unsigned col
-  );
-    begin
-      poly_id_a = POLY_ID_A_BASE + (row * QREM_MAX_K) + col;
-    end
-  endfunction
-
-  function automatic int unsigned poly_id_s(
-    input int unsigned col
-  );
-    begin
-      poly_id_s = POLY_ID_S_BASE + col;
-    end
-  endfunction
-
-  function automatic int unsigned poly_id_e(
-    input int unsigned row
-  );
-    begin
-      poly_id_e = POLY_ID_E_BASE + row;
-    end
-  endfunction
-
-  function automatic int unsigned poly_id_t(
-    input int unsigned row
-  );
-    begin
-      poly_id_t = POLY_ID_T_BASE + row;
-    end
-  endfunction
-
-  function automatic int unsigned poly_id_temp(
-    input int unsigned slot
-  );
-    begin
-      poly_id_temp = POLY_ID_TEMP_BASE + slot;
-    end
-  endfunction
+  localparam int POLY_ID_WORK0  = 13;
+  localparam int POLY_ID_WORK1  = 14;
+  localparam int POLY_ID_WORK2  = 15;
+  localparam int POLY_ID_WORK3  = 16;
+  localparam int POLY_ID_WORK4  = 17;
+  localparam int POLY_ID_WORK5  = 18;
+  localparam int POLY_ID_WORK6  = 19;
+  localparam int POLY_ID_WORK7  = 20;
+  localparam int POLY_ID_WORK8  = 21;
+  localparam int POLY_ID_WORK9  = 22;
+  localparam int POLY_ID_WORK10 = 23;
+  localparam int POLY_ID_WORK11 = 24;
+  localparam int POLY_ID_WORK12 = 25;
+  localparam int POLY_ID_WORK13 = 26;
+  localparam int POLY_ID_WORK14 = 27;
+  localparam int POLY_ID_WORK15 = 28;
+  localparam int POLY_ID_WORK16 = 29;
+  localparam int POLY_ID_WORK17 = 30;
+  localparam int POLY_ID_WORK18 = 31;
 
 endpackage

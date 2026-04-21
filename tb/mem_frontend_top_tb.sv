@@ -4,7 +4,7 @@ import qrem_mem_map_pkg::*;
 import qrem_seed_map_pkg::*;
 
 module mem_frontend_top_tb;
-  // Integration TB for the v0.75 memory subsystem.
+  // Integration TB for the v0.85 memory subsystem.
   // The old mem_frontend_top block was merged into poly_mem_subsystem, but
   // this filename is kept so existing build flows still have a stable target.
 
@@ -40,6 +40,21 @@ module mem_frontend_top_tb;
   logic [3:0]                     pau_rd_lane_valid_o;
   logic [3:0][W-1:0]              pau_rd_data;
   logic                           pau_stall;
+
+  logic                           pau_aux_req;
+  logic                           pau_aux_rd_en;
+  logic [POLY_W-1:0]              pau_aux_rd_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx;
+  logic [3:0]                     pau_aux_rd_lane_valid;
+  logic [3:0]                     pau_aux_wr_en;
+  logic [POLY_W-1:0]              pau_aux_wr_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_aux_wr_idx;
+  logic [3:0][W-1:0]              pau_aux_wr_data;
+  logic                           pau_aux_rd_valid;
+  logic [POLY_W-1:0]              pau_aux_rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx_o;
+  logic [3:0]                     pau_aux_rd_lane_valid_o;
+  logic [3:0][W-1:0]              pau_aux_rd_data;
 
   logic                           hsu_req;
   logic                           hsu_rd_en;
@@ -118,6 +133,20 @@ module mem_frontend_top_tb;
     .pau_rd_lane_valid_o(pau_rd_lane_valid_o),
     .pau_rd_data(pau_rd_data),
     .pau_stall(pau_stall),
+    .pau_aux_req(pau_aux_req),
+    .pau_aux_rd_en(pau_aux_rd_en),
+    .pau_aux_rd_poly_id(pau_aux_rd_poly_id),
+    .pau_aux_rd_idx(pau_aux_rd_idx),
+    .pau_aux_rd_lane_valid(pau_aux_rd_lane_valid),
+    .pau_aux_wr_en(pau_aux_wr_en),
+    .pau_aux_wr_poly_id(pau_aux_wr_poly_id),
+    .pau_aux_wr_idx(pau_aux_wr_idx),
+    .pau_aux_wr_data(pau_aux_wr_data),
+    .pau_aux_rd_valid(pau_aux_rd_valid),
+    .pau_aux_rd_poly_id_o(pau_aux_rd_poly_id_o),
+    .pau_aux_rd_idx_o(pau_aux_rd_idx_o),
+    .pau_aux_rd_lane_valid_o(pau_aux_rd_lane_valid_o),
+    .pau_aux_rd_data(pau_aux_rd_data),
     .hsu_req(hsu_req),
     .hsu_rd_en(hsu_rd_en),
     .hsu_rd_poly_id(hsu_rd_poly_id),
@@ -185,6 +214,16 @@ module mem_frontend_top_tb;
       pau_wr_poly_id    = '0;
       pau_wr_idx        = '0;
       pau_wr_data       = '0;
+
+      pau_aux_req           = 1'b0;
+      pau_aux_rd_en         = 1'b0;
+      pau_aux_rd_poly_id    = '0;
+      pau_aux_rd_idx        = '0;
+      pau_aux_rd_lane_valid = '0;
+      pau_aux_wr_en         = '0;
+      pau_aux_wr_poly_id    = '0;
+      pau_aux_wr_idx        = '0;
+      pau_aux_wr_data       = '0;
 
       hsu_req           = 1'b0;
       hsu_rd_en         = 1'b0;
@@ -309,18 +348,162 @@ module mem_frontend_top_tb;
     rst = 1'b0;
     tick();
 
+    if (POLY_ID_S0 != 0 || POLY_ID_S3 != 3 || POLY_ID_EI != 4 ||
+        POLY_ID_A0 != 5 || POLY_ID_A3 != 8 ||
+        POLY_ID_T0 != 9 || POLY_ID_T3 != 12 ||
+        POLY_ID_WORK0 != 13 || POLY_ID_WORK18 != 31)
+      $fatal(1, "Unexpected fixed v0.85 poly-id slot layout");
+
     // Prime data used by scheduler and overlap checks.
-    prime_poly_with_pau(2, 0, 1, 2, 3, 16'h1200, 16'h1201, 16'h1202, 16'h1203);
-    prime_poly_with_pau(6, 12, 13, 14, 15, 16'h6600, 16'h6601, 16'h6602, 16'h6603);
+    prime_poly_with_pau(POLY_ID_S2, 0, 1, 2, 3, 16'h1200, 16'h1201, 16'h1202, 16'h1203);
+    prime_poly_with_pau(POLY_ID_A1, 12, 13, 14, 15, 16'h6600, 16'h6601, 16'h6602, 16'h6603);
 
     // ------------------------------------------------------------------
-    // 1) Legal dual-read scheduling with per-client response routing.
+    // 1) PAU-owned legal dual-read using primary + auxiliary descriptors.
+    // ------------------------------------------------------------------
+    pau_req               = 1'b1;
+    pau_rd_en             = 1'b1;
+    pau_rd_poly_id        = POLY_ID_S2;
+    pau_rd_idx[0]         = COEFF_W'(0);
+    pau_rd_idx[1]         = COEFF_W'(1);
+    pau_rd_idx[2]         = COEFF_W'(2);
+    pau_rd_idx[3]         = COEFF_W'(3);
+    pau_rd_lane_valid     = 4'b1111;
+
+    pau_aux_req           = 1'b1;
+    pau_aux_rd_en         = 1'b1;
+    pau_aux_rd_poly_id    = POLY_ID_A1;
+    pau_aux_rd_idx[0]     = COEFF_W'(12);
+    pau_aux_rd_idx[1]     = COEFF_W'(13);
+    pau_aux_rd_idx[2]     = COEFF_W'(14);
+    pau_aux_rd_idx[3]     = COEFF_W'(15);
+    pau_aux_rd_lane_valid = 4'b1111;
+    #1;
+
+    if (pau_stall)
+      $fatal(1, "Expected legal PAU primary+aux dual-read issue");
+    tick();
+
+    if (!pau_rd_valid || !pau_aux_rd_valid)
+      $fatal(1, "Expected both PAU read response channels");
+    if (pau_rd_poly_id_o !== POLY_W'(POLY_ID_S2) ||
+        pau_aux_rd_poly_id_o !== POLY_W'(POLY_ID_A1))
+      $fatal(1, "PAU auxiliary read tags mismatch");
+    if (pau_rd_data[0] !== 16'h1200 || pau_rd_data[1] !== 16'h1201 ||
+        pau_rd_data[2] !== 16'h1202 || pau_rd_data[3] !== 16'h1203)
+      $fatal(1, "PAU primary dual-read data mismatch");
+    if (pau_aux_rd_data[0] !== 16'h6600 || pau_aux_rd_data[1] !== 16'h6601 ||
+        pau_aux_rd_data[2] !== 16'h6602 || pau_aux_rd_data[3] !== 16'h6603)
+      $fatal(1, "PAU auxiliary dual-read data mismatch");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 2) PAU-owned legal dual-write using both internal ports.
+    // ------------------------------------------------------------------
+    pau_req            = 1'b1;
+    pau_wr_en          = 4'b1111;
+    pau_wr_poly_id     = POLY_ID_WORK5;
+    pau_wr_idx[0]      = COEFF_W'(32);
+    pau_wr_idx[1]      = COEFF_W'(33);
+    pau_wr_idx[2]      = COEFF_W'(34);
+    pau_wr_idx[3]      = COEFF_W'(35);
+    pau_wr_data[0]     = 16'hA500;
+    pau_wr_data[1]     = 16'hA501;
+    pau_wr_data[2]     = 16'hA502;
+    pau_wr_data[3]     = 16'hA503;
+
+    pau_aux_req        = 1'b1;
+    pau_aux_wr_en      = 4'b1111;
+    pau_aux_wr_poly_id = POLY_ID_WORK6;
+    pau_aux_wr_idx[0]  = COEFF_W'(36);
+    pau_aux_wr_idx[1]  = COEFF_W'(37);
+    pau_aux_wr_idx[2]  = COEFF_W'(38);
+    pau_aux_wr_idx[3]  = COEFF_W'(39);
+    pau_aux_wr_data[0] = 16'hA600;
+    pau_aux_wr_data[1] = 16'hA601;
+    pau_aux_wr_data[2] = 16'hA602;
+    pau_aux_wr_data[3] = 16'hA603;
+    #1;
+
+    if (pau_stall)
+      $fatal(1, "Expected legal PAU primary+aux dual-write issue");
+    tick();
+    clear_poly_clients();
+
+    read_poly_with_pau(POLY_ID_WORK5, 32, 33, 34, 35,
+                       16'hA500, 16'hA501, 16'hA502, 16'hA503);
+    read_poly_with_pau(POLY_ID_WORK6, 36, 37, 38, 39,
+                       16'hA600, 16'hA601, 16'hA602, 16'hA603);
+
+    // ------------------------------------------------------------------
+    // 3) PAU-owned legal read/write overlap.
+    // ------------------------------------------------------------------
+    pau_req               = 1'b1;
+    pau_rd_en             = 1'b1;
+    pau_rd_poly_id        = POLY_ID_S2;
+    pau_rd_idx[0]         = COEFF_W'(0);
+    pau_rd_idx[1]         = COEFF_W'(1);
+    pau_rd_idx[2]         = COEFF_W'(2);
+    pau_rd_idx[3]         = COEFF_W'(3);
+    pau_rd_lane_valid     = 4'b1111;
+
+    pau_aux_req           = 1'b1;
+    pau_aux_wr_en         = 4'b1111;
+    pau_aux_wr_poly_id    = POLY_ID_WORK7;
+    pau_aux_wr_idx[0]     = COEFF_W'(40);
+    pau_aux_wr_idx[1]     = COEFF_W'(41);
+    pau_aux_wr_idx[2]     = COEFF_W'(42);
+    pau_aux_wr_idx[3]     = COEFF_W'(43);
+    pau_aux_wr_data[0]    = 16'hA700;
+    pau_aux_wr_data[1]    = 16'hA701;
+    pau_aux_wr_data[2]    = 16'hA702;
+    pau_aux_wr_data[3]    = 16'hA703;
+    #1;
+
+    if (pau_stall)
+      $fatal(1, "Expected legal PAU primary-read + aux-write issue");
+    tick();
+    if (!pau_rd_valid || pau_aux_rd_valid)
+      $fatal(1, "Expected PAU primary read response only for read/write overlap");
+    if (pau_rd_data[0] !== 16'h1200 || pau_rd_data[1] !== 16'h1201 ||
+        pau_rd_data[2] !== 16'h1202 || pau_rd_data[3] !== 16'h1203)
+      $fatal(1, "PAU read/write overlap data mismatch");
+    clear_poly_clients();
+
+    read_poly_with_pau(POLY_ID_WORK7, 40, 41, 42, 43,
+                       16'hA700, 16'hA701, 16'hA702, 16'hA703);
+
+    // ------------------------------------------------------------------
+    // 4) PAU-owned same-address read/write is rejected before issue.
+    // ------------------------------------------------------------------
+    pau_req               = 1'b1;
+    pau_rd_en             = 1'b1;
+    pau_rd_poly_id        = POLY_ID_S2;
+    pau_rd_idx[0]         = COEFF_W'(0);
+    pau_rd_lane_valid     = 4'b0001;
+
+    pau_aux_req           = 1'b1;
+    pau_aux_wr_en         = 4'b0001;
+    pau_aux_wr_poly_id    = POLY_ID_S2;
+    pau_aux_wr_idx[0]     = COEFF_W'(0);
+    pau_aux_wr_data[0]    = 16'hBAD0;
+    #1;
+
+    if (!pau_stall)
+      $fatal(1, "Expected PAU same-address read/write to stall");
+    tick();
+    if (pau_rd_valid || pau_aux_rd_valid || mem_fault_o)
+      $fatal(1, "Illegal PAU auxiliary pairing should not issue or fault");
+    clear_poly_clients();
+
+    // ------------------------------------------------------------------
+    // 5) Legal dual-read scheduling with per-client response routing.
     //    HSU is not a polynomial-memory reader, so this coverage uses
     //    PAU + Transcoder.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
-    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_poly_id    = POLY_ID_S2;
     pau_rd_idx[0]     = COEFF_W'(0);
     pau_rd_idx[1]     = COEFF_W'(1);
     pau_rd_idx[2]     = COEFF_W'(2);
@@ -329,7 +512,7 @@ module mem_frontend_top_tb;
 
     tr_req            = 1'b1;
     tr_rd_en          = 1'b1;
-    tr_rd_poly_id     = POLY_W'(6);
+    tr_rd_poly_id     = POLY_ID_A1;
     tr_rd_idx[0]      = COEFF_W'(12);
     tr_rd_idx[1]      = COEFF_W'(13);
     tr_rd_idx[2]      = COEFF_W'(14);
@@ -343,7 +526,8 @@ module mem_frontend_top_tb;
 
     if (!pau_rd_valid || !tr_rd_valid || hsu_rd_valid)
       $fatal(1, "Expected PAU and Transcoder read responses in the same cycle");
-    if (pau_rd_poly_id_o !== POLY_W'(2) || tr_rd_poly_id_o !== POLY_W'(6))
+    if (pau_rd_poly_id_o !== POLY_W'(POLY_ID_S2) ||
+        tr_rd_poly_id_o !== POLY_W'(POLY_ID_A1))
       $fatal(1, "Dual-read response routing tagged the wrong client");
     if (pau_rd_data[0] !== 16'h1200 || pau_rd_data[1] !== 16'h1201 ||
         pau_rd_data[2] !== 16'h1202 || pau_rd_data[3] !== 16'h1203)
@@ -354,11 +538,11 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 2) HSU polynomial reads are unsupported and should stall cleanly.
+    // 6) HSU polynomial reads are unsupported and should stall cleanly.
     // ------------------------------------------------------------------
     hsu_req           = 1'b1;
     hsu_rd_en         = 1'b1;
-    hsu_rd_poly_id    = POLY_W'(2);
+    hsu_rd_poly_id    = POLY_ID_S2;
     hsu_rd_idx[0]     = COEFF_W'(0);
     hsu_rd_idx[1]     = COEFF_W'(1);
     hsu_rd_idx[2]     = COEFF_W'(2);
@@ -374,11 +558,47 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 3) Legal dual-write scheduling across two clients.
+    // ------------------------------------------------------------------
+    // 7) HSU can fill the active A row buffer while PAU consumes older data.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_ID_S2;
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(1);
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+
+    hsu_req        = 1'b1;
+    hsu_wr_en      = 4'b1111;
+    hsu_wr_poly_id = POLY_ID_A0;
+    hsu_wr_idx[0]  = COEFF_W'(44);
+    hsu_wr_idx[1]  = COEFF_W'(45);
+    hsu_wr_idx[2]  = COEFF_W'(46);
+    hsu_wr_idx[3]  = COEFF_W'(47);
+    hsu_wr_data[0] = 16'hA000;
+    hsu_wr_data[1] = 16'hA001;
+    hsu_wr_data[2] = 16'hA002;
+    hsu_wr_data[3] = 16'hA003;
+    #1;
+
+    if (pau_stall || hsu_stall)
+      $fatal(1, "Expected HSU A-row write to overlap legal PAU read");
+    tick();
+    if (!pau_rd_valid)
+      $fatal(1, "Expected PAU read response during HSU row-buffer fill");
+    clear_poly_clients();
+
+    read_poly_with_pau(POLY_ID_A0, 44, 45, 46, 47,
+                       16'hA000, 16'hA001, 16'hA002, 16'hA003);
+
+    // ------------------------------------------------------------------
+    // 8) Legal dual-write scheduling across two clients.
     // ------------------------------------------------------------------
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
-    pau_wr_poly_id = POLY_W'(10);
+    pau_wr_poly_id = POLY_ID_WORK0;
     pau_wr_idx[0]  = COEFF_W'(8);
     pau_wr_idx[1]  = COEFF_W'(9);
     pau_wr_idx[2]  = COEFF_W'(10);
@@ -390,7 +610,7 @@ module mem_frontend_top_tb;
 
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = POLY_W'(11);
+    hsu_wr_poly_id = POLY_ID_WORK1;
     hsu_wr_idx[0]  = COEFF_W'(16);
     hsu_wr_idx[1]  = COEFF_W'(17);
     hsu_wr_idx[2]  = COEFF_W'(18);
@@ -406,16 +626,18 @@ module mem_frontend_top_tb;
     tick();
     clear_poly_clients();
 
-    read_poly_with_pau(10, 8, 9, 10, 11, 16'hA100, 16'hA101, 16'hA102, 16'hA103);
-    read_poly_with_pau(11, 16, 17, 18, 19, 16'hB200, 16'hB201, 16'hB202, 16'hB203);
+    read_poly_with_pau(POLY_ID_WORK0, 8, 9, 10, 11,
+                       16'hA100, 16'hA101, 16'hA102, 16'hA103);
+    read_poly_with_pau(POLY_ID_WORK1, 16, 17, 18, 19,
+                       16'hB200, 16'hB201, 16'hB202, 16'hB203);
 
     // ------------------------------------------------------------------
-    // 4) Legal read/write overlap remains allowed.
+    // 9) Legal read/write overlap remains allowed.
     //    HSU contributes as the polynomial writer while Transcoder reads.
     // ------------------------------------------------------------------
     tr_req            = 1'b1;
     tr_rd_en          = 1'b1;
-    tr_rd_poly_id     = POLY_W'(2);
+    tr_rd_poly_id     = POLY_ID_S2;
     tr_rd_idx[0]      = COEFF_W'(0);
     tr_rd_idx[1]      = COEFF_W'(1);
     tr_rd_idx[2]      = COEFF_W'(2);
@@ -424,7 +646,7 @@ module mem_frontend_top_tb;
 
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = POLY_W'(12);
+    hsu_wr_poly_id = POLY_ID_WORK2;
     hsu_wr_idx[0]  = COEFF_W'(20);
     hsu_wr_idx[1]  = COEFF_W'(21);
     hsu_wr_idx[2]  = COEFF_W'(22);
@@ -445,21 +667,22 @@ module mem_frontend_top_tb;
       $fatal(1, "Transcoder overlap read data mismatch");
     clear_poly_clients();
 
-    read_poly_with_pau(12, 20, 21, 22, 23, 16'hC300, 16'hC301, 16'hC302, 16'hC303);
+    read_poly_with_pau(POLY_ID_WORK2, 20, 21, 22, 23,
+                       16'hC300, 16'hC301, 16'hC302, 16'hC303);
 
     // ------------------------------------------------------------------
-    // 5) Combined read+write requests still own both ports atomically.
+    // 10) Combined read+write requests still own both ports atomically.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
-    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_poly_id    = POLY_ID_S2;
     pau_rd_idx[0]     = COEFF_W'(0);
     pau_rd_idx[1]     = COEFF_W'(1);
     pau_rd_idx[2]     = COEFF_W'(2);
     pau_rd_idx[3]     = COEFF_W'(3);
     pau_rd_lane_valid = 4'b1111;
     pau_wr_en         = 4'b1111;
-    pau_wr_poly_id    = POLY_W'(13);
+    pau_wr_poly_id    = POLY_ID_WORK3;
     pau_wr_idx[0]     = COEFF_W'(24);
     pau_wr_idx[1]     = COEFF_W'(25);
     pau_wr_idx[2]     = COEFF_W'(26);
@@ -471,7 +694,7 @@ module mem_frontend_top_tb;
 
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = POLY_W'(14);
+    hsu_wr_poly_id = POLY_ID_WORK4;
     hsu_wr_idx[0]  = COEFF_W'(28);
     hsu_wr_idx[1]  = COEFF_W'(29);
     hsu_wr_idx[2]  = COEFF_W'(30);
@@ -491,11 +714,12 @@ module mem_frontend_top_tb;
       $fatal(1, "Expected PAU read response for atomic combined request");
     clear_poly_clients();
 
-    read_poly_with_pau(13, 24, 25, 26, 27, 16'hD400, 16'hD401, 16'hD402, 16'hD403);
+    read_poly_with_pau(POLY_ID_WORK3, 24, 25, 26, 27,
+                       16'hD400, 16'hD401, 16'hD402, 16'hD403);
 
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = POLY_W'(14);
+    hsu_wr_poly_id = POLY_ID_WORK4;
     hsu_wr_idx[0]  = COEFF_W'(28);
     hsu_wr_idx[1]  = COEFF_W'(29);
     hsu_wr_idx[2]  = COEFF_W'(30);
@@ -507,14 +731,15 @@ module mem_frontend_top_tb;
     tick();
     clear_poly_clients();
 
-    read_poly_with_pau(14, 28, 29, 30, 31, 16'hE500, 16'hE501, 16'hE502, 16'hE503);
+    read_poly_with_pau(POLY_ID_WORK4, 28, 29, 30, 31,
+                       16'hE500, 16'hE501, 16'hE502, 16'hE503);
 
     // ------------------------------------------------------------------
-    // 6) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
+    // 11) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = qrem_mem_map_pkg::poly_id_s(1);
+    hsu_wr_poly_id = POLY_ID_S1;
     hsu_wr_idx[0]  = COEFF_W'(0);
     hsu_wr_idx[1]  = COEFF_W'(1);
     hsu_wr_idx[2]  = COEFF_W'(2);
@@ -528,7 +753,7 @@ module mem_frontend_top_tb;
 
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
-    pau_wr_poly_id = qrem_mem_map_pkg::poly_id_s(1);
+    pau_wr_poly_id = POLY_ID_S1;
     pau_wr_idx[0]  = COEFF_W'(0);
     pau_wr_idx[1]  = COEFF_W'(1);
     pau_wr_idx[2]  = COEFF_W'(2);
@@ -540,16 +765,16 @@ module mem_frontend_top_tb;
     tick();
     clear_poly_clients();
 
-    read_poly_with_tr(qrem_mem_map_pkg::poly_id_s(1), 0, 1, 2, 3,
+    read_poly_with_tr(POLY_ID_S1, 0, 1, 2, 3,
                       16'h6100, 16'h6101, 16'h6102, 16'h6103);
 
     // ------------------------------------------------------------------
-    // 7) Semantic KeyGen placement: e[i] overwritten in place with e_hat[i].
+    // 12) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
     //    Final row commit lands in t[i].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
-    hsu_wr_poly_id = qrem_mem_map_pkg::poly_id_e(2);
+    hsu_wr_poly_id = POLY_ID_EI;
     hsu_wr_idx[0]  = COEFF_W'(4);
     hsu_wr_idx[1]  = COEFF_W'(5);
     hsu_wr_idx[2]  = COEFF_W'(6);
@@ -563,7 +788,7 @@ module mem_frontend_top_tb;
 
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
-    pau_wr_poly_id = qrem_mem_map_pkg::poly_id_e(2);
+    pau_wr_poly_id = POLY_ID_EI;
     pau_wr_idx[0]  = COEFF_W'(4);
     pau_wr_idx[1]  = COEFF_W'(5);
     pau_wr_idx[2]  = COEFF_W'(6);
@@ -577,7 +802,7 @@ module mem_frontend_top_tb;
 
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
-    pau_wr_poly_id = qrem_mem_map_pkg::poly_id_t(2);
+    pau_wr_poly_id = POLY_ID_T2;
     pau_wr_idx[0]  = COEFF_W'(8);
     pau_wr_idx[1]  = COEFF_W'(9);
     pau_wr_idx[2]  = COEFF_W'(10);
@@ -589,13 +814,13 @@ module mem_frontend_top_tb;
     tick();
     clear_poly_clients();
 
-    read_poly_with_tr(qrem_mem_map_pkg::poly_id_e(2), 4, 5, 6, 7,
+    read_poly_with_tr(POLY_ID_EI, 4, 5, 6, 7,
                       16'h8200, 16'h8201, 16'h8202, 16'h8203);
-    read_poly_with_tr(qrem_mem_map_pkg::poly_id_t(2), 8, 9, 10, 11,
+    read_poly_with_tr(POLY_ID_T2, 8, 9, 10, 11,
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
 
     // ------------------------------------------------------------------
-    // 8) Seed/protocol store uses semantic ID + beat mapping above Memory.
+    // 13) Seed/protocol store uses semantic ID + beat mapping above Memory.
     // ------------------------------------------------------------------
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
@@ -626,19 +851,19 @@ module mem_frontend_top_tb;
       $fatal(1, "H(ek) protocol-store readback mismatch");
 
     // ------------------------------------------------------------------
-    // 9) Illegal cross-client same-address collisions are conservatively
+    // 14) Illegal cross-client same-address collisions are conservatively
     //    rejected by the scheduler before issue; the admitted request still
     //    completes deterministically without undefined memory semantics.
     // ------------------------------------------------------------------
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
-    pau_rd_poly_id    = POLY_W'(2);
+    pau_rd_poly_id    = POLY_ID_S2;
     pau_rd_idx[0]     = COEFF_W'(0);
     pau_rd_lane_valid = 4'b0001;
 
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b0001;
-    hsu_wr_poly_id = POLY_W'(2);
+    hsu_wr_poly_id = POLY_ID_S2;
     hsu_wr_idx[0]  = COEFF_W'(0);
     hsu_wr_data[0] = 16'hFACE;
     #1;
@@ -655,7 +880,7 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 10) Wipe blocks all users and clears both poly + protocol storage.
+    // 15) Wipe blocks all users and clears both poly + protocol storage.
     // ------------------------------------------------------------------
     wipe_i = 1'b1;
     tick();
@@ -671,11 +896,11 @@ module mem_frontend_top_tb;
     if (wipe_busy_o)
       $fatal(1, "wipe_busy_o should deassert after wipe completes");
 
-    read_poly_with_pau(qrem_mem_map_pkg::poly_id_s(1), 0, 1, 2, 3,
+    read_poly_with_pau(POLY_ID_S1, 0, 1, 2, 3,
                        16'h0000, 16'h0000, 16'h0000, 16'h0000);
-    read_poly_with_pau(qrem_mem_map_pkg::poly_id_e(2), 4, 5, 6, 7,
+    read_poly_with_pau(POLY_ID_EI, 4, 5, 6, 7,
                        16'h0000, 16'h0000, 16'h0000, 16'h0000);
-    read_poly_with_pau(qrem_mem_map_pkg::poly_id_t(2), 8, 9, 10, 11,
+    read_poly_with_pau(POLY_ID_T2, 8, 9, 10, 11,
                        16'h0000, 16'h0000, 16'h0000, 16'h0000);
 
     hsu_seed_req  = 1'b1;

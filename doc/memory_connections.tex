@@ -234,7 +234,9 @@ There is \textbf{no per-client bank partitioning}. All three
 clients---PAU, HSU, and Transcoder---share all four polynomial banks
 through the same scheduler and wrapper. The subsystem may admit up to two
 legal single-sided requests in a cycle; if a client presents a combined
-read+write request, it owns both internal ports atomically. Every issued
+read+write request, it owns both internal ports atomically. PAU may also
+own both ports through its primary and auxiliary descriptors when the pair
+is legal. Every issued
 request is routed through the \emph{same}
 \texttt{poly\_mem\_wrapper\_4bank} instance, which applies the same
 Memory-side bank-mapping function regardless of which client is requesting.
@@ -317,9 +319,12 @@ NTT butterfly & 2~coeffs & 2~coeffs &
   computes the butterfly, writes both results back. \\
 INTT butterfly & 2~coeffs & 2~coeffs &
   Inverse direction; same address pattern as NTT. \\
-CWM (Coefficient-Wise Multiply) & 4~coeffs & 4~coeffs &
-  Reads 4~coefficients from two polynomials, multiplies
-  element-wise, writes 4~accumulated results. \\
+CWM / MAC accumulate & 4+4~coeffs & --- &
+  Reads A-row and secret operands, multiplies element-wise,
+  and accumulates internally in the PAU MAC register. \\
+Row finish / drain & e or acc & 4~coeffs &
+  Adds the active error scratch as needed and writes final row
+  results back to the selected output slot. \\
 ADD drain & 0 & 4~coeffs &
   Write-only phase; drains accumulated results from the AU
   pipeline back to memory. \\
@@ -380,16 +385,22 @@ Instead, it uses the \textbf{CMI adapter} (\texttt{cmi.sv}), which:
 
 \subsubsection{Which Polynomial Slots}
 
-The PAU accesses all 32 slots depending on the active ML-KEM operation:
+The PAU accesses the fixed controller-visible slots depending on the active
+ML-KEM operation:
 
 \begin{itemize}
   \item \textbf{NTT/INTT:} Operates in-place on any polynomial slot
-    (A~matrix rows, s, e, t, or temp).
-  \item \textbf{CWM:} Reads from two source slots (e.g., A row and s
-    column), writes accumulated result to an output slot (t or temp).
+    selected by the controller.
+  \item \textbf{CWM/MAC:} Reads from two source slots, typically one
+    active A row-buffer slot and one $s$ slot, and accumulates internally.
   \item \textbf{ADD drain:} Writes accumulated results from the AU to
-    any destination slot.
+    the selected $t$ or work slot.
 \end{itemize}
+
+For the corrected KeyGen placement, IDs 0--3 hold $s_0\ldots s_3$ and
+are overwritten in place as $\hat{s}$; ID~4 is the active $e_i/\hat{e}_i$
+scratch; IDs 5--8 are the active A row buffer; IDs 9--12 hold final
+$\hat{t}_0\ldots\hat{t}_3$; IDs 13--31 are generic work slots.
 
 The PAU does \textbf{not} use the seed RAM.
 
@@ -450,10 +461,11 @@ HSU reads protocol objects such as seeds through the dedicated
 \subsubsection{Which Polynomial Slots}
 
 \begin{itemize}
-  \item \textbf{Sample NTT:} Writes to A~matrix slots (poly\_id 0--15).
-    Each A~matrix entry is sampled using SHAKE-128 rejection sampling.
-  \item \textbf{Sample CBD:} Writes to secret~s slots (16--19) and
-    error~e slots (20--23) using SHAKE-256 CBD sampling.
+  \item \textbf{Sample NTT:} Writes the active A row buffer in slots
+    5--8. The controller chooses how many of these slots are active for
+    $k=2$, $k=3$, or $k=4$.
+  \item \textbf{Sample CBD:} Writes secret~$s$ slots 0--3 and the active
+    error scratch slot~4 using SHAKE-256 CBD sampling.
 \end{itemize}
 
 \subsubsection{HSU and the Seed RAM}
@@ -521,10 +533,10 @@ rare.
 
 \begin{itemize}
   \item \textbf{ByteEncode / Compress:} Reads from output~t slots
-    (24--27) or A~matrix slots, produces byte stream output.
+    (9--12) or controller-selected work slots, producing byte stream output.
   \item \textbf{ByteDecode / Decompress:} Writes received ciphertext
-    or public-key bytes into temp/scratch slots (28--31) or directly
-    into A/t regions.
+    or public-key bytes into work slots (13--31) or directly into
+    controller-selected polynomial slots.
 \end{itemize}
 
 The Transcoder does \textbf{not} directly use the seed RAM in typical

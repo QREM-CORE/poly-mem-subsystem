@@ -3,7 +3,7 @@ package qrem_seed_map_pkg;
   // ---------------------------------------------------------------------------
   // Seed / protocol store sizing
   // ---------------------------------------------------------------------------
-  // v0.75 treats this as a lightweight protocol store for short fixed-size
+  // v0.85 treats this as a lightweight protocol store for short fixed-size
   // ML-KEM objects. It remains address-based inside Memory, while bridges above
   // Memory may present semantic access as {seed_id, seed_idx}.
   //
@@ -40,7 +40,7 @@ package qrem_seed_map_pkg;
   //   [BASE + 0] .. [BASE + 3]
   //
   // The names intentionally mix "seed" and "protocol" concepts because the
-  // store is used for more than just fresh randomness in v0.75:
+  // store is used for more than just fresh randomness in v0.85:
   //   d, z, m, rho, sigma, H(ek), ss, and temporary protocol values.
   //
   // Why bases instead of IDs:

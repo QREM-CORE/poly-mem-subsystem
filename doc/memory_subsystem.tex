@@ -349,14 +349,18 @@ allocation is defined in \texttt{qrem\_mem\_map\_pkg.sv}:
 \toprule
 \textbf{Region} & \textbf{poly\_id} & \textbf{Count} & \textbf{Purpose} \\
 \midrule
-A matrix     & 0--15  & 16 & Public matrix (ML-KEM-1024 worst case $4 \times 4$) \\
-Secret $s$   & 16--19 & 4  & Secret vector \\
-Error $e$    & 20--23 & 4  & Error vector \\
-Output $t$   & 24--27 & 4  & Public key / ciphertext result \\
-Temp/scratch & 28--31 & 4  & Intermediate storage \\
+Secret $s$   & 0--3   & 4  & $s_0\ldots s_3$, overwritten in place as $\hat{s}$ \\
+Error $e_i$ scratch & 4 & 1 & Active row error, overwritten in place as $\hat{e}_i$ \\
+A row buffer & 5--8   & 4  & Active row buffer $A_0\ldots A_3$ \\
+Output $t$   & 9--12  & 4  & Final $\hat{t}_0\ldots \hat{t}_3$ outputs \\
+Work/scratch & 13--31 & 19 & Generic controller-visible working storage \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+Memory does not take $k$ as an input and does not compute dynamic
+placement. The controller chooses the active subset of the fixed $k \le 4$
+slots for each mode.
 
 Each bank therefore has a total depth of:
 \begin{equation}
@@ -393,8 +397,11 @@ Its responsibilities are:
 
 \subsubsection{Per-Client Interface}
 
-Every polynomial-memory client port presents an identical set of signals
-(Table~\ref{tab:client_if}).
+Every polynomial-memory client port presents the stable signal set in
+Table~\ref{tab:client_if}. PAU additionally exposes an auxiliary descriptor
+with the same read/write descriptor shape so PAU can own both internal ports
+for legal read/read, read/write, and write/write phases. This is a Memory-side
+scheduling feature only; PAU-side CMI remains owned by PAU.
 
 \begin{table}[H]
 \centering
@@ -465,6 +472,8 @@ ports in the same cycle:
     bank/address analysis.
   \item If a client presents a combined read+write request, assign both
     internal ports to that client atomically.
+  \item If PAU presents primary and auxiliary descriptors, assign both
+    internal ports to PAU when the pair is legal.
 \end{enumerate}
 
 \textbf{Why strict priority?} The PAU sits on the critical path of NTT
@@ -678,10 +687,11 @@ make run_mem_frontend_top_tb SIM=verilator
 \textbf{Testbench} & \textbf{Verified Functionality} \\
 \midrule
 \texttt{poly\_mem\_tb}
-  & Map/helper smoke test, protocol-store ID+beat mapping, wipe \\
+  & Fixed map constant smoke test, protocol-store ID+beat mapping, wipe \\
 \texttt{mem\_frontend\_top\_tb}
-  & Full integration: legal dual-read / dual-write / read-write overlap,
-    combined ownership, KeyGen placements, protocol store, wipe \\
+  & Full integration: PAU-owned dual-port phases, legal dual-read /
+    dual-write / read-write overlap, combined ownership, KeyGen placements,
+    protocol store, wipe \\
 \texttt{poly\_mem\_wrapper\_4bank\_tb}
   & Wrapper legal overlap, same-address hazards, same-request conflicts \\
 \texttt{seed\_ram\_tb}

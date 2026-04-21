@@ -6,7 +6,7 @@
  * Description:
  *   Lightweight true-dual-port seed / protocol store used by the QREM core.
  *
- *   v0.75 treats the seed store differently from the polynomial banks:
+ *   v0.85 treats the seed store differently from the polynomial banks:
  *     - no shared arbiter
  *     - small fixed-size protocol values
  *     - concurrent HSU-side and Transcoder-side access

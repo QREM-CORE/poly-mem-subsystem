@@ -1,10 +1,10 @@
-# QREM Memory v0.75 Interface Review
+# QREM Memory v0.85 Interface Review
 
 Author: Quardin Lyttle
 
 ## Purpose
 
-This note captures the current Memory-repo contract after the v0.75 alignment pass. It focuses on what is stable, what changed internally, and how the current subsystem maps to the intended KeyGen / Encaps / Decaps direction.
+This note captures the current Memory-repo contract after the v0.85 alignment pass. It focuses on what is stable, what changed internally, and how the current subsystem maps to the intended KeyGen / Encaps / Decaps direction.
 
 ## What Stays Stable
 
@@ -25,6 +25,8 @@ Clarifications:
 - the client sees one stable external contract even though the internals now schedule two generic ports
 - HSU polynomial read signals remain in the port list for compatibility, but HSU polynomial access is write-only in this Memory repo phase
 - HSU reads protocol objects through the seed/protocol store, not through polynomial memory
+- PAU has a primary-plus-auxiliary descriptor path so PAU can own both internal ports for legal read/read, read/write, and write/write phases
+- PAU-side CMI remains in PAU; Memory only checks memory-side legality and bank realization
 
 ### Seed / protocol store interface
 
@@ -71,6 +73,12 @@ If a client presents read and write together in one cycle:
 - lower-priority clients stall
 
 This preserves the PAU-friendly atomic phase behavior needed by current control flow.
+
+If PAU presents primary and auxiliary descriptors together:
+
+- both descriptors belong to PAU for the cycle
+- the pair is admitted only when same-request and cross-port hazards are legal
+- lower-priority clients stall behind the PAU-owned pair
 
 ### Wrapper model
 
@@ -125,26 +133,22 @@ That keeps ownership deterministic and avoids undefined same-cycle outcomes.
 
 Numeric slot assignments remain stable:
 
-- `A`: `0..15`
-- `S`: `16..19`
-- `E`: `20..23`
-- `T`: `24..27`
-- `TEMP`: `28..31`
+- `S0..S3`: `0..3`
+- `EI`: `4`
+- `A0..A3`: `5..8`
+- `T0..T3`: `9..12`
+- `WORK0..WORK18`: `13..31`
 
-New helpers/aliases formalize controller intent:
+The package intentionally exposes straightforward constants only. Memory does
+not take `k` and does not compute dynamic placement; the controller chooses the
+active IDs for `k=2..4`.
 
-- `poly_id_a(row,col)`
-- `poly_id_s(j)`
-- `poly_id_e(i)`
-- `poly_id_t(i)`
-- `poly_id_temp(slot)`
+KeyGen-oriented rewrite semantics:
 
-KeyGen-oriented semantic aliases:
-
-- `s[j]` is also `s_hat[j]` after PAU overwrite
-- `e[i]` is also `e_hat[i]` after PAU overwrite
-- `t[i]` is the final `t_hat[i]`
-- `TEMP_0` is the streamed `A_hat` scratch alias
+- `s_j` is also `s_hat_j` after PAU overwrite in `S0..S3`
+- `e_i` is also `e_hat_i` after PAU overwrite in `EI`
+- `A0..A3` are the active row buffer for `A_hat[i][j]`
+- `T0..T3` hold final `t_hat_i`
 
 ### Seed / protocol map
 
@@ -169,12 +173,14 @@ The package keeps stable base addresses and adds:
 The current map and interfaces cleanly support the intended controller flow:
 
 - HSU writes `s[j]`, PAU later overwrites the same slot with `s_hat[j]`
-- HSU writes `e[i]`, PAU later overwrites the same slot with `e_hat[i]`
-- PAU commits final `t_hat[i]` into `t[i]`
+- HSU writes active `e_i` into `EI`, PAU later overwrites the same slot with `e_hat_i`
+- HSU fills the active `A0..A3` row buffer
+- PAU commits final `t_hat[i]` into `T0..T3`
 - Transcoder reads `t[i]` and protocol-store objects such as `rho`
 - HSU can store `H(ek)` in the protocol store without disturbing polynomial traffic
 
-The map also stays general enough for later Encaps / Decaps use because it does not collapse the A-matrix region into a KeyGen-only scratch scheme.
+The work region stays available for later Encaps / Decaps use instead of
+hardcoding all remaining slots to one KeyGen-only microsequence.
 
 ## Still Outside Memory Scope
 
@@ -187,7 +193,7 @@ Practical implication:
 
 ## Summary
 
-The v0.75 Memory contract is now:
+The v0.85 Memory contract is now:
 
 - stable externally
 - smarter internally

@@ -35,6 +35,21 @@ module poly_mem_tb;
   logic [3:0][W-1:0]              pau_rd_data;
   logic                           pau_stall;
 
+  logic                           pau_aux_req;
+  logic                           pau_aux_rd_en;
+  logic [POLY_W-1:0]              pau_aux_rd_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx;
+  logic [3:0]                     pau_aux_rd_lane_valid;
+  logic [3:0]                     pau_aux_wr_en;
+  logic [POLY_W-1:0]              pau_aux_wr_poly_id;
+  logic [3:0][COEFF_W-1:0]        pau_aux_wr_idx;
+  logic [3:0][W-1:0]              pau_aux_wr_data;
+  logic                           pau_aux_rd_valid;
+  logic [POLY_W-1:0]              pau_aux_rd_poly_id_o;
+  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx_o;
+  logic [3:0]                     pau_aux_rd_lane_valid_o;
+  logic [3:0][W-1:0]              pau_aux_rd_data;
+
   logic                           hsu_req;
   logic                           hsu_rd_en;
   logic [POLY_W-1:0]              hsu_rd_poly_id;
@@ -112,6 +127,20 @@ module poly_mem_tb;
     .pau_rd_lane_valid_o(pau_rd_lane_valid_o),
     .pau_rd_data(pau_rd_data),
     .pau_stall(pau_stall),
+    .pau_aux_req(pau_aux_req),
+    .pau_aux_rd_en(pau_aux_rd_en),
+    .pau_aux_rd_poly_id(pau_aux_rd_poly_id),
+    .pau_aux_rd_idx(pau_aux_rd_idx),
+    .pau_aux_rd_lane_valid(pau_aux_rd_lane_valid),
+    .pau_aux_wr_en(pau_aux_wr_en),
+    .pau_aux_wr_poly_id(pau_aux_wr_poly_id),
+    .pau_aux_wr_idx(pau_aux_wr_idx),
+    .pau_aux_wr_data(pau_aux_wr_data),
+    .pau_aux_rd_valid(pau_aux_rd_valid),
+    .pau_aux_rd_poly_id_o(pau_aux_rd_poly_id_o),
+    .pau_aux_rd_idx_o(pau_aux_rd_idx_o),
+    .pau_aux_rd_lane_valid_o(pau_aux_rd_lane_valid_o),
+    .pau_aux_rd_data(pau_aux_rd_data),
     .hsu_req(hsu_req),
     .hsu_rd_en(hsu_rd_en),
     .hsu_rd_poly_id(hsu_rd_poly_id),
@@ -182,6 +211,16 @@ module poly_mem_tb;
       pau_wr_idx        = '0;
       pau_wr_data       = '0;
 
+      pau_aux_req           = 1'b0;
+      pau_aux_rd_en         = 1'b0;
+      pau_aux_rd_poly_id    = '0;
+      pau_aux_rd_idx        = '0;
+      pau_aux_rd_lane_valid = '0;
+      pau_aux_wr_en         = '0;
+      pau_aux_wr_poly_id    = '0;
+      pau_aux_wr_idx        = '0;
+      pau_aux_wr_data       = '0;
+
       hsu_req           = 1'b0;
       hsu_rd_en         = 1'b0;
       hsu_rd_poly_id    = '0;
@@ -221,22 +260,19 @@ module poly_mem_tb;
     tick();
 
     // ------------------------------------------------------------------
-    // Package helper / alias sanity checks.
+    // Fixed v0.85 package slot sanity checks.
     // ------------------------------------------------------------------
     if (QREM_NUM_POLYS != 32 || QREM_MAX_K != 4)
       $fatal(1, "Unexpected poly memory package sizing constants");
-    if (qrem_mem_map_pkg::poly_id_a(0, 0) != POLY_ID_A_00 ||
-        qrem_mem_map_pkg::poly_id_a(2, 3) != POLY_ID_A_23)
-      $fatal(1, "A-matrix poly-id helper mismatch");
-    if (qrem_mem_map_pkg::poly_id_s(1) != POLY_ID_S_1 ||
-        qrem_mem_map_pkg::poly_id_e(2) != POLY_ID_E_2 ||
-        qrem_mem_map_pkg::poly_id_t(3) != POLY_ID_T_3 ||
-        qrem_mem_map_pkg::poly_id_temp(1) != POLY_ID_TEMP_1)
-      $fatal(1, "Vector/scratch poly-id helper mismatch");
-    if (POLY_ID_S_HAT_2 != POLY_ID_S_2 || POLY_ID_E_HAT_1 != POLY_ID_E_1 ||
-        POLY_ID_T_HAT_3 != POLY_ID_T_3 ||
-        POLY_ID_A_STREAM_SCRATCH != POLY_ID_TEMP_0)
-      $fatal(1, "Semantic poly-id aliases must preserve stable slots");
+    if (POLY_ID_S0 != 0 || POLY_ID_S3 != 3 || POLY_ID_EI != 4)
+      $fatal(1, "Secret/error poly-id constants mismatch");
+    if (POLY_ID_A0 != 5 || POLY_ID_A3 != 8)
+      $fatal(1, "A row-buffer poly-id constants mismatch");
+    if (POLY_ID_T0 != 9 || POLY_ID_T3 != 12)
+      $fatal(1, "T result poly-id constants mismatch");
+    if (POLY_ID_WORK_BASE != 13 || POLY_ID_WORK_COUNT != 19 ||
+        POLY_ID_WORK0 != 13 || POLY_ID_WORK18 != 31)
+      $fatal(1, "Work-region poly-id constants mismatch");
 
     if (qrem_seed_map_pkg::seed_base_addr(SEED_ID_D) != SEED_AW'(SEED_BASE_D) ||
         qrem_seed_map_pkg::seed_base_addr(SEED_ID_Z) != SEED_AW'(SEED_BASE_Z) ||
@@ -282,7 +318,7 @@ module poly_mem_tb;
     // ------------------------------------------------------------------
     hsu_req           = 1'b1;
     hsu_wr_en         = 4'b1111;
-    hsu_wr_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    hsu_wr_poly_id    = POLY_ID_S0;
     hsu_wr_idx[0]     = COEFF_W'(0);
     hsu_wr_idx[1]     = COEFF_W'(1);
     hsu_wr_idx[2]     = COEFF_W'(2);
@@ -296,7 +332,7 @@ module poly_mem_tb;
 
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
-    pau_rd_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    pau_rd_poly_id    = POLY_ID_S0;
     pau_rd_idx[0]     = COEFF_W'(0);
     pau_rd_idx[1]     = COEFF_W'(1);
     pau_rd_idx[2]     = COEFF_W'(2);
@@ -325,7 +361,7 @@ module poly_mem_tb;
 
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
-    pau_rd_poly_id    = qrem_mem_map_pkg::poly_id_s(0);
+    pau_rd_poly_id    = POLY_ID_S0;
     pau_rd_idx[0]     = COEFF_W'(0);
     pau_rd_idx[1]     = COEFF_W'(1);
     pau_rd_idx[2]     = COEFF_W'(2);

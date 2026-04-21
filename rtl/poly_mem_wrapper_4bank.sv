@@ -6,7 +6,7 @@
  * Description:
  *   Four-bank true-dual-port polynomial memory wrapper for the QREM core.
  *
- *   v0.75 now treats the bank wrapper as two generic vector ports rather than a
+ *   v0.85 treats the bank wrapper as two generic vector ports rather than a
  *   fixed "read plane + write plane" split:
  *     - Port 0 is bound to physical RAM Port A across all banks
  *     - Port 1 is bound to physical RAM Port B across all banks
