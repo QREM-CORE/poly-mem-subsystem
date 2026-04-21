@@ -1,179 +1,148 @@
 # QREM Polynomial Memory Subsystem
 
-> Reference: *"Highly-Efficient Hardware Architecture for ML-KEM PQC Standard"*
-> — H. Jung, Q. D. Truong, H. Lee (IEEE OJCAS 2025)
-
 ## Overview
 
-This repository implements the **Memory Subsystem** for the QREM ML-KEM (FIPS 203) hardware accelerator.
+This repository implements the v0.75 Memory subsystem for the QREM ML-KEM hardware accelerator.
 
-ML-KEM operates on polynomials of **256 coefficients** (16-bit, over Z_q with q = 3329). The memory subsystem provides **4-coefficient parallel access per cycle** using a **4-bank dual-port RAM architecture** with **CMI bank mapping** that guarantees no bank collisions for NTT butterfly patterns.
+The subsystem owns:
 
-### Key Features
+- polynomial memory for PAU, HSU, and Transcoder
+- a small dual-port seed/protocol store for HSU and Transcoder sideband protocol objects
+- wipe and fault/status sideband logic
 
-- **CMI bit-pair-sum bank mapping** — `bank = (idx[1:0] + idx[3:2] + idx[5:4] + idx[7:6]) mod 4`
-- **Split read/write arbitration planes** — one read owner and one write owner may overlap in the same cycle
-- **Strict priority within each plane** — PAU > HSU > Transcoder
-- **32-polynomial capacity** (configurable) with 1-cycle read latency
-- **Dedicated dual-port seed/protocol store** (32 × 64-bit, HSU port + Transcoder port)
-- **Security wipe FSM** — zeroes all polynomial + seed memory (~2081 cycles with the 32×64 seed store)
-- **Tagged response routing** — read data delivered exclusively to the originating client
+The external polynomial-memory client contract remains stable:
 
----
+- `*_req`
+- `*_rd_en`, `*_rd_poly_id`, `*_rd_idx`, `*_rd_lane_valid`
+- `*_wr_en`, `*_wr_poly_id`, `*_wr_idx`, `*_wr_data`
+- `*_rd_valid`, `*_rd_poly_id_o`, `*_rd_idx_o`, `*_rd_lane_valid_o`, `*_rd_data`
+- `*_stall`
+
+## Key Features
+
+- 4-bank polynomial memory with CMI bit-pair-sum bank mapping
+- deterministic 2-port internal scheduling
+- strict client priority: `PAU > HSU > Transcoder`
+- legal `read/read`, `write/write`, and `read/write` overlap when bank/address pairs are safe
+- atomic combined read+write requests for PAU-style phases
+- 32 polynomial slots with stable numeric IDs
+- dual-port 32 x 64-bit seed/protocol store
+- 1-cycle polynomial-read latency
+- wipe FSM for both polynomial memory and protocol store
 
 ## Architecture
 
-```
-            PAU          HSU         Transcoder
-             │            │              │
-             ▼            ▼              ▼
-    ┌──────────────────────────────────────────────┐
-    │            poly_mem_subsystem                │
-    │                                              │
-    │  ┌────────────┐                              │
-    │  │ Read Arbiter│  PAU > HSU > Transcoder     │
-    │  │ Write Arb.  │  PAU > HSU > Transcoder     │
-    │  └─────┬───────┴───────────────┬─────────────┘
-    │        │                       │
-    │  ┌─────▼───────────────────────▼──────┐       │
-    │  │ poly_mem_wrapper_4bank             │       │
-    │  │  Port A = one 4-lane READ plane    │       │
-    │  │  Port B = one 4-lane WRITE plane   │       │
-    │  │  CMI bank mapping + conflict check │       │
-    │  └────────────────────────────────────┘       │
-    │                                │             │
-    │  ┌───────────────────────────┐ │             │
-    │  │ seed_ram (dual-port 32×64)│ │             │
-    │  └──────────────────┘          │             │
-    │                                │             │
-    │  ┌──────────────────┐          │             │
-    │  │ Wipe FSM         │          │             │
-    │  └──────────────────┘          │             │
-    └──────────────────────────────────────────────┘
-```
+Internally, `poly_mem_subsystem.sv` works like this:
 
-### Clients
+1. Choose the highest-priority schedulable request.
+2. Choose a second request only if it is pair-legal with the first.
+3. Route the admitted requests into `poly_mem_wrapper_4bank.sv`.
+4. Route up to two read responses back to the originating clients one cycle later.
+5. Keep combined read+write requests atomic by assigning both internal ports to one client.
 
-| Client | Priority | Usage |
-|--------|----------|-------|
-| **PAU** (Polynomial Arithmetic Unit) | Highest | NTT butterfly, CWM, ADD drain — via external CMI adapter |
-| **HSU** (Hash Sampling Unit) | Mid | Writes sampled coefficients via Poly Stream Writer |
-| **Transcoder** | Lowest | ByteEncode/Decode, Compress/Decompress |
+`poly_mem_wrapper_4bank.sv` exposes two symmetric generic vector ports:
 
----
+- Port 0 binds to physical RAM Port A across all 4 banks
+- Port 1 binds to physical RAM Port B across all 4 banks
+- either port may be a read vector or a write vector in a cycle
+
+That lets the implementation admit:
+
+- 2 reads in a cycle when legal
+- 2 writes in a cycle when legal
+- 1 read + 1 write in a cycle when legal
+
+## Polynomial Map
+
+The numeric polynomial slot assignments stay stable:
+
+| Region | poly_id range | Count | Purpose |
+|---|---:|---:|---|
+| `A` | `0..15` | 16 | Full A-matrix residency for up to `k=4` |
+| `S` | `16..19` | 4 | Secret vector |
+| `E` | `20..23` | 4 | Error vector / row-error scratch |
+| `T` | `24..27` | 4 | Final `t_hat` outputs |
+| `TEMP` | `28..31` | 4 | Scratch / working storage |
+
+Semantic notes from `qrem_mem_map_pkg.sv`:
+
+- `s[j]` and `e[i]` are intentionally in-place overwrite slots for `s_hat[j]` and `e_hat[i]`
+- `t[i]` is the final placement for `t_hat[i]`
+- `TEMP_0` is aliased as `POLY_ID_A_STREAM_SCRATCH` for streamed `A_hat` placement
+- helper functions `poly_id_a(row,col)`, `poly_id_s(j)`, `poly_id_e(i)`, `poly_id_t(i)`, and `poly_id_temp(slot)` formalize controller-visible placement
+
+## Seed / Protocol Store
+
+The protocol store remains internally address-based, but bridge-facing logic above Memory should use:
+
+- `seed_id`
+- `seed_idx`
+
+`qrem_seed_map_pkg.sv` keeps the stable object bases for:
+
+- `d`
+- `z`
+- `m`
+- `rho`
+- `sigma`
+- `H(ek)`
+- `ss`
+- `tmp`
+
+Helper functions:
+
+- `seed_base_addr(seed_id)`
+- `seed_word_addr(seed_id, beat)`
+
+The intended contract above Memory is:
+
+`seed_addr = seed_base_addr(seed_id) + seed_idx`
 
 ## RTL Modules
 
 | Module | Description |
-|--------|-------------|
-| `poly_mem_subsystem.sv` | **Top-level.** Split read/write arbitration, response routing, dual-port seed store, wipe FSM |
-| `mem_arbiter.sv` | Combinational strict-priority arbiter used independently for read and write planes |
-| `poly_mem_wrapper_4bank.sv` | 4-bank memory core with distinct read plane and write plane |
-| `poly_ram_bank.sv` | Dual-port RAM primitive (Port A = read plane, Port B = write plane) |
-| `seed_ram.sv` | Dual-port seed/protocol store (32 × 64-bit) |
-| `delay_n.sv` | Legacy generic delay line (kept for shared utility use) |
-| `qrem_mem_map_pkg.sv` | 32-polynomial slot address map constants |
-| `qrem_seed_map_pkg.sv` | Seed/protocol-store slot map constants |
+|---|---|
+| `rtl/poly_mem_subsystem.sv` | Top-level subsystem, internal 2-port scheduler, response routing, seed store integration, wipe FSM |
+| `rtl/poly_mem_wrapper_4bank.sv` | 4-bank wrapper with two generic vector ports and hazard checking |
+| `rtl/poly_ram_bank.sv` | Bank RAM primitive |
+| `rtl/seed_ram.sv` | Dual-port protocol store RAM |
+| `rtl/qrem_mem_map_pkg.sv` | Stable polynomial slot map plus semantic helpers/aliases |
+| `rtl/qrem_seed_map_pkg.sv` | Stable protocol-store map plus semantic address helpers |
+| `rtl/mem_arbiter.sv` | Legacy strict-priority helper retained in the repo; current top-level scheduling is in `poly_mem_subsystem.sv` |
+| `rtl/delay_n.sv` | Shared utility delay line |
 
----
+## Hazard Rules
 
-## Memory Mapping (CMI)
+Wrapper-level rules:
 
-The conflict-free bank mapping uses a bit-pair-sum scheme:
+- same-request lane conflicts are illegal
+- same-address read/write is illegal
+- same-address write/write is illegal
+- same-bank different-address overlap is legal when each physical port usage is well-defined
 
-```
-bank = (idx[1:0] + idx[3:2] + idx[5:4] + idx[7:6]) mod 4
-row  = idx / 4
-bank_addr = poly_id × 64 + row
-```
+Top-level rule:
 
-This guarantees every NTT butterfly pair maps to **distinct banks** at every stage.
+- illegal cross-client pairings are filtered by the scheduler before issue, so the lower-priority request stalls instead of creating ambiguous memory behavior
 
----
+## Testing
 
-## Polynomial Slot Map
+The repo includes:
 
-| Region | poly_id | Count | Purpose |
-|--------|---------|-------|---------|
-| A matrix | 0–15 | 16 | Public matrix (up to 4×4 for ML-KEM-1024) |
-| Secret **s** | 16–19 | 4 | Secret vector |
-| Error **e** | 20–23 | 4 | Error vector |
-| Output **t** | 24–27 | 4 | Public key / result |
-| Temp | 28–31 | 4 | Scratch storage |
+- `tb/poly_mem_wrapper_4bank_tb.sv`: legal `RR/WW/RW` issue and wrapper hazard checks
+- `tb/poly_mem_tb.sv`: package/helper smoke, protocol-store ID+beat mapping, wipe
+- `tb/mem_frontend_top_tb.sv`: dual-read routing, dual-write, read/write overlap, combined atomicity, KeyGen placements, protocol-store concurrency, wipe
 
----
+Expected output is `TB PASS`.
 
-## Running Simulations
-
-The project uses a shared Makefile supporting **ModelSim/Questa** and **Verilator**.
-
-```bash
-# Run all testbenches
-make run_all SIM=verilator
-
-# Run a specific testbench
-make run_poly_mem_tb SIM=verilator
-make run_mem_frontend_top_tb SIM=verilator
-```
-
-### Testbenches
-
-| Testbench | Coverage |
-|-----------|----------|
-| `poly_mem_tb` | Smoke test: vector write/read, dual-port seed store, security wipe |
-| `mem_frontend_top_tb` | Integration: PAU/HSU/Transcoder overlap, combined-owner lockout, seed concurrency, wipe |
-| `poly_mem_wrapper_4bank_tb` | Split-plane overlap, conflict detection, read response reorder |
-| `mem_arbiter_tb` | Priority ordering, stall propagation |
-| `seed_ram_tb` | Dual-port seed/protocol read/write behavior |
-
-Expected output: **`TB PASS`**
-
----
-
-## Directory Structure
-
-```
-poly-mem-subsystem/
-├── rtl/
-│   ├── qrem_mem_map_pkg.sv
-│   ├── delay_n.sv
-│   ├── mem_arbiter.sv
-│   ├── poly_ram_bank.sv
-│   ├── seed_ram.sv
-│   ├── poly_mem_wrapper_4bank.sv
-│   └── poly_mem_subsystem.sv       ← top-level
-├── tb/
-│   ├── poly_mem_tb.sv
-│   ├── mem_frontend_top_tb.sv
-│   ├── poly_mem_wrapper_4bank_tb.sv
-│   ├── mem_arbiter_tb.sv
-│   └── seed_ram_tb.sv
-├── doc/
-│   ├── docs.md                     ← detailed markdown docs
-│   └── memory_subsystem.tex        ← comprehensive LaTeX document
-├── build-tools/
-├── rtl.f
-├── Makefile
-└── README.md
-```
-
----
+The shared `make` flow depends on the `build-tools` submodule being initialized in the local checkout. For direct local smoke checks, the updated benches compile and run with `iverilog` / `vvp`.
 
 ## Documentation
 
-- **[doc/docs.md](doc/docs.md)** — Detailed markdown documentation covering architecture, CMI mapping, all modules, timing, and verification
-- **[doc/memory_subsystem.tex](doc/memory_subsystem.tex)** — Comprehensive LaTeX document with figures, equations, and tables
+- `doc/V075_INTERFACE_REVIEW.md`
+- `doc/docs.md`
+- `doc/memory_subsystem.tex`
+- `doc/memory_connections.tex`
 
----
+## Follow-On Note
 
-## Authors
-
-York University — Computer Engineering  
-QREM ML-KEM Hardware Accelerator Project
-
-- Mavra Muzmmal
-- Quardin Lyttle
-- Salwan Aldhahab
-- Jessica Buentipo
-- Mai Komar
-- Kiet Le
+This phase intentionally does not modify PAU RTL. Memory now makes the intended v0.75 KeyGen placements expressible and testable, but PAU still needs a follow-on integration update for the richer source/destination contract implied by MAC-heavy row processing.

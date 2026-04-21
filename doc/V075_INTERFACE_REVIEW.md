@@ -2,146 +2,192 @@
 
 Author: Quardin Lyttle
 
-## Why this note exists
+## Purpose
 
-This repo has been moving from an older "single shared frontend" view of
-memory toward the v0.75 architecture:
+This note captures the current Memory-repo contract after the v0.75 alignment pass. It focuses on what is stable, what changed internally, and how the current subsystem maps to the intended KeyGen / Encaps / Decaps direction.
 
-- true-dual-port polynomial banks
-- split read/write memory-plane ownership
-- dedicated HSU and Transcoder seed/protocol access
-- PAU-owned CMI instead of a duplicate copy in Memory
+## What Stays Stable
 
-This file captures the current interface status, what changed, and what still
-needs follow-up.
+### Polynomial client interface
 
-## What is now true
+Each polynomial-memory client still uses:
 
-### Polynomial memory
+- `*_req`
+- `*_rd_en`, `*_rd_poly_id`, `*_rd_idx`, `*_rd_lane_valid`
+- `*_wr_en`, `*_wr_poly_id`, `*_wr_idx`, `*_wr_data`
+- `*_rd_valid`, `*_rd_poly_id_o`, `*_rd_idx_o`, `*_rd_lane_valid_o`, `*_rd_data`
+- `*_stall`
 
-`poly_mem_subsystem.sv` now exposes a client contract with:
+Clarifications:
 
-- one request qualifier: `*_req`
-- read side:
-  - `*_rd_en`
-  - `*_rd_poly_id`
-  - `*_rd_idx`
-  - `*_rd_lane_valid`
-- write side:
-  - `*_wr_en`
-  - `*_wr_poly_id`
-  - `*_wr_idx`
-  - `*_wr_data`
-- read response:
-  - `*_rd_valid`
-  - `*_rd_poly_id_o`
-  - `*_rd_idx_o`
-  - `*_rd_lane_valid_o`
-  - `*_rd_data`
-- flow control:
-  - `*_stall`
+- `rd_idx` / `wr_idx` are coefficient indices, not bank IDs
+- bank mapping and row mapping stay inside Memory
+- the client sees one stable external contract even though the internals now schedule two generic ports
 
-The subsystem arbitrates one **read owner** and one **write owner** per cycle.
+### Seed / protocol store interface
 
-Important rule:
+The physical Memory-side seed/protocol ports remain:
 
-- if a client presents a combined read+write request, it owns both planes for
-  that cycle
-
-That is the conservative behavior needed for PAU-style atomic memory phases.
-
-### Seed / protocol store
-
-The seed store is now independent from polynomial arbitration and has:
-
-- one HSU-side port
-- one Transcoder-side port
-
-Signals:
-
-- HSU:
+- HSU side:
   - `hsu_seed_req`, `hsu_seed_we`, `hsu_seed_addr`, `hsu_seed_wdata`
   - `hsu_seed_ready`, `hsu_seed_rvalid`, `hsu_seed_rdata`
-- Transcoder:
+- Transcoder side:
   - `tr_seed_req`, `tr_seed_we`, `tr_seed_addr`, `tr_seed_wdata`
   - `tr_seed_ready`, `tr_seed_rvalid`, `tr_seed_rdata`
 
-This matches the v0.75 direction much better than a single shared seed port.
+Above Memory, bridges should use semantic:
 
-### CMI ownership
+- `seed_id`
+- `seed_idx`
 
-`cmi.sv` should live with the PAU, not with Memory.
+with:
 
-Reason:
+`seed_addr = seed_base_addr(seed_id) + seed_idx`
 
-- CMI is part of the PAU timing contract
-- it aligns PAU writeback addresses to PAU datapath latency
-- Memory should only expose the shared storage fabric and arbitration behavior
+## What Changed Internally
 
-The duplicate Memory-owned copy was removed for that reason.
+### Scheduler
 
-## Positive / Neutral / Negative
+The old split read-plane / write-plane model is gone internally.
 
-### Positive
+The subsystem now uses a deterministic 2-port scheduler:
 
-- Memory now actively exploits dual-porting for **read+write overlap**
-- HSU sampling writes can overlap with PAU read-heavy windows when the PAU is
-  not presenting a combined request
-- Seed/protocol access no longer needs to fight polynomial arbitration
-- The interface is much closer to the v0.75 architecture snapshot
+1. Admit the highest-priority schedulable request.
+2. Admit a second request only if it is legal with the first after bank/address analysis.
+3. Keep client ownership explicit and deterministic.
 
-### Neutral
+Priority remains:
 
-- The system is still conservative: only one owner per plane per cycle
-- This is good enough for KeyGen bring-up and safer than over-aggressive
-  overlap
-- It is not yet the most throughput-optimized possible design
+- `PAU > HSU > Transcoder`
 
-### Negative / Remaining gaps
+### Combined requests
 
-- Two different clients still cannot both write polynomial memory in the same
-  cycle
-- PAU combined requests lock both planes, so HSU/Transcoder must still wait in
-  those windows
-- Detailed repo docs still trail the RTL in some places
-- PAU still needs a cleaner top-level integration contract for the new Memory
-  interface, especially around CWM drain/writeback and final result placement
+If a client presents read and write together in one cycle:
 
-## Redundant / Obsolete / Missing
+- that request is atomic
+- both internal ports belong to that client for the cycle
+- lower-priority clients stall
 
-### Redundant / obsolete
+This preserves the PAU-friendly atomic phase behavior needed by current control flow.
 
-- Memory-owned `cmi.sv`
-- Memory-side `tb/cmi_tb.sv`
-- older descriptions that talk about a single shared seed port
-- older descriptions that say the whole memory subsystem only accepts one
-  client total per cycle
+### Wrapper model
 
-### Missing / follow-up
+`poly_mem_wrapper_4bank.sv` now presents:
 
-- A PAU integration update that fully uses separate read/write polynomial IDs
-- A clearer PAU controller contract for:
-  - source polynomial ID(s)
-  - destination polynomial ID
-  - drain/writeback target
-- Top-level bridge modules for:
-  - HSU poly stream writer
-  - HSU seed reader
-  - Transcoder seed reader/writer
-- More Encaps / Decaps focused scheduling tests once those flows are wired
+- generic Port 0 bound to physical RAM Port A
+- generic Port 1 bound to physical RAM Port B
 
-## Practical KeyGen impact
+Either generic port may be:
 
-This memory design is a good fit for the conservative row-wise KeyGen FSM:
+- one 4-lane read vector
+- one 4-lane write vector
 
-- PAU can read `s_hat` / `A_row_i`
-- HSU can write the next row in cycles where PAU is read-only
-- Seed values can be fetched/written without disturbing polynomial traffic
+That means the wrapper can legally support:
 
-But:
+- 2 reads in a cycle
+- 2 writes in a cycle
+- 1 read + 1 write in a cycle
 
-- if PAU owns both planes for a combined request, HSU/Transcoder will still
-  stall
-- so the scheduler should still treat PAU-heavy windows as privileged
+when the actual bank/address usage is safe.
 
-That is acceptable for a first correct v0.75 implementation.
+## Hazard Rules
+
+### Wrapper-level hazards
+
+These are explicit faults if admitted to the wrapper:
+
+- same-address read/write: `3'b001`
+- same-address write/write: `3'b010`
+- same-request lane conflict: `3'b011`
+
+Important point:
+
+- legality is decided from final bank/address usage, not just from `poly_id`
+
+### Top-level scheduling behavior
+
+At the top level, illegal cross-client pairings are filtered before issue:
+
+- the higher-priority admissible request may proceed
+- the lower-priority unsafe request stalls
+- the scheduler does not deliberately issue an unsafe pair just to fault it later
+
+That keeps ownership deterministic and avoids undefined same-cycle outcomes.
+
+## Map Semantics
+
+### Polynomial map
+
+Numeric slot assignments remain stable:
+
+- `A`: `0..15`
+- `S`: `16..19`
+- `E`: `20..23`
+- `T`: `24..27`
+- `TEMP`: `28..31`
+
+New helpers/aliases formalize controller intent:
+
+- `poly_id_a(row,col)`
+- `poly_id_s(j)`
+- `poly_id_e(i)`
+- `poly_id_t(i)`
+- `poly_id_temp(slot)`
+
+KeyGen-oriented semantic aliases:
+
+- `s[j]` is also `s_hat[j]` after PAU overwrite
+- `e[i]` is also `e_hat[i]` after PAU overwrite
+- `t[i]` is the final `t_hat[i]`
+- `TEMP_0` is the streamed `A_hat` scratch alias
+
+### Seed / protocol map
+
+The store is intentionally broader than "seed RAM". It covers protocol objects used across KeyGen, Encaps, and Decaps:
+
+- `d`
+- `z`
+- `m`
+- `rho`
+- `sigma`
+- `H(ek)`
+- `ss`
+- `tmp`
+
+The package keeps stable base addresses and adds:
+
+- `seed_base_addr(seed_id)`
+- `seed_word_addr(seed_id, beat)`
+
+## KeyGen Fit
+
+The current map and interfaces cleanly support the intended controller flow:
+
+- HSU writes `s[j]`, PAU later overwrites the same slot with `s_hat[j]`
+- HSU writes `e[i]`, PAU later overwrites the same slot with `e_hat[i]`
+- PAU commits final `t_hat[i]` into `t[i]`
+- Transcoder reads `t[i]` and protocol-store objects such as `rho`
+- HSU can store `H(ek)` in the protocol store without disturbing polynomial traffic
+
+The map also stays general enough for later Encaps / Decaps use because it does not collapse the A-matrix region into a KeyGen-only scratch scheme.
+
+## Still Outside Memory Scope
+
+This pass intentionally does not edit PAU RTL.
+
+Practical implication:
+
+- Memory now supports the intended placements and legal overlap behavior
+- PAU still needs a follow-on integration update for the richer source/destination contract implied by MAC accumulation and row-final commit behavior
+
+## Summary
+
+The v0.75 Memory contract is now:
+
+- stable externally
+- smarter internally
+- explicit about semantic placement
+- still deterministic about ownership
+- conservative about ambiguous hazards
+
+That is the right balance for current KeyGen work while keeping the subsystem usable for future Encaps / Decaps flows.
