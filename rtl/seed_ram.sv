@@ -49,7 +49,7 @@ module seed_ram #(
   output logic [W-1:0]      b_rdata
 );
 
-  logic [W-1:0] mem [0:DEPTH-1];
+ (* ram_style = "block" *) logic [W-1:0] mem [0:DEPTH-1];
 
   always_ff @(posedge clk) begin
     if (a_we)
