@@ -1,13 +1,15 @@
 package qrem_mem_map_pkg;
 
+  import qrem_global_pkg::*;
+
   // ============================================================
   // Global memory capacity plan
   // ============================================================
   localparam int QREM_MAX_K = 4;
-  localparam int QREM_NUM_POLYS = 32;
+  localparam int QREM_NUM_POLYS = NUM_POLYS;
 
   // Each polynomial occupies 64 rows per bank (256 coeffs / 4 banks).
-  localparam int QREM_POLY_ROWS_PER_BANK = 64;
+  localparam int QREM_POLY_ROWS_PER_BANK = NCOEFF / 4;
 
   // ============================================================
   // v0.85 fixed controller-visible polynomial slots

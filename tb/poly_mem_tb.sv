@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
 
+import qrem_global_pkg::*;
 import qrem_mem_map_pkg::*;
 import qrem_seed_map_pkg::*;
 
@@ -14,7 +15,7 @@ module poly_mem_tb;
   localparam int POLY_W     = $clog2(NUM_POLYS);
   localparam int COEFF_ADDR_W = $clog2(NCOEFF);
   localparam int SEED_AW    = $clog2(SEED_DEPTH);
-  localparam int SEED_IDX_W = $clog2(QREM_SEED_BEATS);
+  localparam int SEED_IDX_W = $clog2(SEED_BEATS);
 
   logic clk, rst;
   logic wipe_i, wipe_busy_o, wipe_done_o;

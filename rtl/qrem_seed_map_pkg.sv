@@ -1,5 +1,7 @@
 package qrem_seed_map_pkg;
 
+  import qrem_global_pkg::*;
+
   // ---------------------------------------------------------------------------
   // Seed / protocol store sizing
   // ---------------------------------------------------------------------------
@@ -13,24 +15,10 @@ package qrem_seed_map_pkg;
   // This width is intentionally friendly to both FPGA and ASIC implementation:
   // - wide enough to move 256-bit values in 4 words
   // - still small enough to infer simple BRAM / LUTRAM / register-file style RAM
-  localparam int QREM_SEED_DEPTH = 32;
-  localparam int QREM_SEED_W     = 64;
-  localparam int QREM_SEED_AW    = $clog2(QREM_SEED_DEPTH);
+  localparam int QREM_SEED_AW    = $clog2(SEED_DEPTH);
 
-  localparam int QREM_WORDS_256B = 4;   // 256-bit value in 64-bit words
+  localparam int QREM_WORDS_256B = SEED_BEATS;
   localparam int QREM_NUM_SEED_IDS = 8;
-  localparam int QREM_SEED_BEATS   = QREM_WORDS_256B;
-
-  typedef enum logic [2:0] {
-    SEED_ID_D     = 3'd0,
-    SEED_ID_Z     = 3'd1,
-    SEED_ID_M     = 3'd2,
-    SEED_ID_RHO   = 3'd3,
-    SEED_ID_SIGMA = 3'd4,
-    SEED_ID_HEK   = 3'd5,
-    SEED_ID_SS    = 3'd6,
-    SEED_ID_TMP   = 3'd7
-  } seed_id_e;
 
   // ---------------------------------------------------------------------------
   // 256-bit protocol-object base addresses
@@ -80,7 +68,7 @@ package qrem_seed_map_pkg;
 
   function automatic logic [QREM_SEED_AW-1:0] seed_word_addr(
     input seed_id_e id,
-    input logic [$clog2(QREM_SEED_BEATS)-1:0] beat
+    input logic [$clog2(SEED_BEATS)-1:0] beat
   );
     begin
       seed_word_addr = seed_base_addr(id) + QREM_SEED_AW'(beat);
