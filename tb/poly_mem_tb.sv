@@ -10,8 +10,9 @@ module poly_mem_tb;
   localparam int W          = 16;
   localparam int SEED_DEPTH = 32;
   localparam int SEED_W     = 64;
+  localparam int COEFF_DATA_W = 12;
   localparam int POLY_W     = $clog2(NUM_POLYS);
-  localparam int COEFF_W    = $clog2(NCOEFF);
+  localparam int COEFF_ADDR_W = $clog2(NCOEFF);
   localparam int SEED_AW    = $clog2(SEED_DEPTH);
   localparam int SEED_IDX_W = $clog2(QREM_SEED_BEATS);
 
@@ -23,66 +24,66 @@ module poly_mem_tb;
   logic                           pau_req;
   logic                           pau_rd_en;
   logic [POLY_W-1:0]              pau_rd_poly_id;
-  logic [3:0][COEFF_W-1:0]        pau_rd_idx;
+  logic [3:0][COEFF_ADDR_W-1:0]        pau_rd_idx;
   logic [3:0]                     pau_rd_lane_valid;
   logic [3:0]                     pau_wr_en;
   logic [POLY_W-1:0]              pau_wr_poly_id;
-  logic [3:0][COEFF_W-1:0]        pau_wr_idx;
-  logic [3:0][W-1:0]              pau_wr_data;
+  logic [3:0][COEFF_ADDR_W-1:0]   pau_wr_idx;
+  logic [3:0][COEFF_DATA_W-1:0]   pau_wr_data;
   logic                           pau_rd_valid;
   logic [POLY_W-1:0]              pau_rd_poly_id_o;
-  logic [3:0][COEFF_W-1:0]        pau_rd_idx_o;
+  logic [3:0][COEFF_ADDR_W-1:0]        pau_rd_idx_o;
   logic [3:0]                     pau_rd_lane_valid_o;
-  logic [3:0][W-1:0]              pau_rd_data;
+  logic [3:0][COEFF_DATA_W-1:0]   pau_rd_data;
   logic                           pau_stall;
 
   logic                           pau_aux_req;
   logic                           pau_aux_rd_en;
   logic [POLY_W-1:0]              pau_aux_rd_poly_id;
-  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx;
+  logic [3:0][COEFF_ADDR_W-1:0]        pau_aux_rd_idx;
   logic [3:0]                     pau_aux_rd_lane_valid;
   logic [3:0]                     pau_aux_wr_en;
   logic [POLY_W-1:0]              pau_aux_wr_poly_id;
-  logic [3:0][COEFF_W-1:0]        pau_aux_wr_idx;
-  logic [3:0][W-1:0]              pau_aux_wr_data;
+  logic [3:0][COEFF_ADDR_W-1:0]   pau_aux_wr_idx;
+  logic [3:0][COEFF_DATA_W-1:0]   pau_aux_wr_data;
   logic                           pau_aux_rd_valid;
   logic [POLY_W-1:0]              pau_aux_rd_poly_id_o;
-  logic [3:0][COEFF_W-1:0]        pau_aux_rd_idx_o;
+  logic [3:0][COEFF_ADDR_W-1:0]        pau_aux_rd_idx_o;
   logic [3:0]                     pau_aux_rd_lane_valid_o;
-  logic [3:0][W-1:0]              pau_aux_rd_data;
+  logic [3:0][COEFF_DATA_W-1:0]   pau_aux_rd_data;
 
   logic                           hsu_hash_ek_read_en;
 
   logic                           hsu_req;
   logic                           hsu_rd_en;
   logic [POLY_W-1:0]              hsu_rd_poly_id;
-  logic [3:0][COEFF_W-1:0]        hsu_rd_idx;
+  logic [3:0][COEFF_ADDR_W-1:0]        hsu_rd_idx;
   logic [3:0]                     hsu_rd_lane_valid;
   logic [3:0]                     hsu_wr_en;
   logic [POLY_W-1:0]              hsu_wr_poly_id;
-  logic [3:0][COEFF_W-1:0]        hsu_wr_idx;
-  logic [3:0][W-1:0]              hsu_wr_data;
+  logic [3:0][COEFF_ADDR_W-1:0]   hsu_wr_idx;
+  logic [3:0][COEFF_DATA_W-1:0]   hsu_wr_data;
   logic                           hsu_rd_valid;
   logic [POLY_W-1:0]              hsu_rd_poly_id_o;
-  logic [3:0][COEFF_W-1:0]        hsu_rd_idx_o;
+  logic [3:0][COEFF_ADDR_W-1:0]        hsu_rd_idx_o;
   logic [3:0]                     hsu_rd_lane_valid_o;
-  logic [3:0][W-1:0]              hsu_rd_data;
+  logic [3:0][COEFF_DATA_W-1:0]   hsu_rd_data;
   logic                           hsu_stall;
 
   logic                           tr_req;
   logic                           tr_rd_en;
   logic [POLY_W-1:0]              tr_rd_poly_id;
-  logic [3:0][COEFF_W-1:0]        tr_rd_idx;
+  logic [3:0][COEFF_ADDR_W-1:0]        tr_rd_idx;
   logic [3:0]                     tr_rd_lane_valid;
   logic [3:0]                     tr_wr_en;
   logic [POLY_W-1:0]              tr_wr_poly_id;
-  logic [3:0][COEFF_W-1:0]        tr_wr_idx;
-  logic [3:0][W-1:0]              tr_wr_data;
+  logic [3:0][COEFF_ADDR_W-1:0]   tr_wr_idx;
+  logic [3:0][COEFF_DATA_W-1:0]   tr_wr_data;
   logic                           tr_rd_valid;
   logic [POLY_W-1:0]              tr_rd_poly_id_o;
-  logic [3:0][COEFF_W-1:0]        tr_rd_idx_o;
+  logic [3:0][COEFF_ADDR_W-1:0]        tr_rd_idx_o;
   logic [3:0]                     tr_rd_lane_valid_o;
-  logic [3:0][W-1:0]              tr_rd_data;
+  logic [3:0][COEFF_DATA_W-1:0]   tr_rd_data;
   logic                           tr_stall;
 
   logic                           hsu_seed_req;
@@ -343,11 +344,12 @@ module poly_mem_tb;
     hsu_req           = 1'b1;
     hsu_wr_en         = 4'b1111;
     hsu_wr_poly_id    = POLY_ID_S0;
-    hsu_wr_idx[0]     = COEFF_W'(0);
-    hsu_wr_idx[1]     = COEFF_W'(1);
-    hsu_wr_idx[2]     = COEFF_W'(2);
-    hsu_wr_idx[3]     = COEFF_W'(3);
-    hsu_wr_data[0]    = 16'h1100;
+    hsu_wr_idx[0]     = COEFF_ADDR_W'(0);
+    hsu_wr_idx[1]     = COEFF_ADDR_W'(1);
+    hsu_wr_idx[2]     = COEFF_ADDR_W'(2);
+    hsu_wr_idx[3]     = COEFF_ADDR_W'(3);
+    // Write 16-bit values to verify padding
+    hsu_wr_data[0]    = 16'hFFFF;
     hsu_wr_data[1]    = 16'h1101;
     hsu_wr_data[2]    = 16'h1102;
     hsu_wr_data[3]    = 16'h1103;
@@ -357,17 +359,18 @@ module poly_mem_tb;
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S0;
-    pau_rd_idx[0]     = COEFF_W'(0);
-    pau_rd_idx[1]     = COEFF_W'(1);
-    pau_rd_idx[2]     = COEFF_W'(2);
-    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_idx[0]     = COEFF_ADDR_W'(0);
+    pau_rd_idx[1]     = COEFF_ADDR_W'(1);
+    pau_rd_idx[2]     = COEFF_ADDR_W'(2);
+    pau_rd_idx[3]     = COEFF_ADDR_W'(3);
     pau_rd_lane_valid = 4'b1111;
     tick();
     if (!pau_rd_valid)
       $fatal(1, "Expected readback from semantic S slot");
-    if (pau_rd_data[0] !== 16'h1100 || pau_rd_data[1] !== 16'h1101 ||
-        pau_rd_data[2] !== 16'h1102 || pau_rd_data[3] !== 16'h1103)
-      $fatal(1, "Semantic S slot readback mismatch");
+    // Should be masked to 12-bit
+    if (pau_rd_data[0] !== 12'hFFF || pau_rd_data[1] !== 12'h101 ||
+        pau_rd_data[2] !== 12'h102 || pau_rd_data[3] !== 12'h103)
+      $fatal(1, "Semantic S slot readback mismatch (expected 12-bit data)");
     clear_all();
 
     // ------------------------------------------------------------------
@@ -386,10 +389,10 @@ module poly_mem_tb;
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S0;
-    pau_rd_idx[0]     = COEFF_W'(0);
-    pau_rd_idx[1]     = COEFF_W'(1);
-    pau_rd_idx[2]     = COEFF_W'(2);
-    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_idx[0]     = COEFF_ADDR_W'(0);
+    pau_rd_idx[1]     = COEFF_ADDR_W'(1);
+    pau_rd_idx[2]     = COEFF_ADDR_W'(2);
+    pau_rd_idx[3]     = COEFF_ADDR_W'(3);
     pau_rd_lane_valid = 4'b1111;
     tick();
     if (!pau_rd_valid)

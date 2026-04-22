@@ -34,6 +34,7 @@ module poly_mem_subsystem #(
   parameter int NUM_POLYS  = 32,
   parameter int NCOEFF     = 256,
   parameter int W          = 16,
+  parameter int COEFF_W    = 12,
   parameter int SEED_DEPTH = QREM_SEED_DEPTH,
   parameter int SEED_W     = QREM_SEED_W
 )(
@@ -60,12 +61,12 @@ module poly_mem_subsystem #(
   input  logic [3:0]                         pau_wr_en,
   input  logic [$clog2(NUM_POLYS)-1:0]       pau_wr_poly_id,
   input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_wr_idx,
-  input  logic [3:0][W-1:0]                  pau_wr_data,
+  input  logic [3:0][COEFF_W-1:0]            pau_wr_data,
   output logic                               pau_rd_valid,
   output logic [$clog2(NUM_POLYS)-1:0]       pau_rd_poly_id_o,
   output logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx_o,
   output logic [3:0]                         pau_rd_lane_valid_o,
-  output logic [3:0][W-1:0]                  pau_rd_data,
+  output logic [3:0][COEFF_W-1:0]            pau_rd_data,
   output logic                               pau_stall,
 
   // ========================================================================
@@ -79,12 +80,12 @@ module poly_mem_subsystem #(
   input  logic [3:0]                         pau_aux_wr_en,
   input  logic [$clog2(NUM_POLYS)-1:0]       pau_aux_wr_poly_id,
   input  logic [3:0][$clog2(NCOEFF)-1:0]     pau_aux_wr_idx,
-  input  logic [3:0][W-1:0]                  pau_aux_wr_data,
+  input  logic [3:0][COEFF_W-1:0]            pau_aux_wr_data,
   output logic                               pau_aux_rd_valid,
   output logic [$clog2(NUM_POLYS)-1:0]       pau_aux_rd_poly_id_o,
   output logic [3:0][$clog2(NCOEFF)-1:0]     pau_aux_rd_idx_o,
   output logic [3:0]                         pau_aux_rd_lane_valid_o,
-  output logic [3:0][W-1:0]                  pau_aux_rd_data,
+  output logic [3:0][COEFF_W-1:0]            pau_aux_rd_data,
 
   // ==========================================================================
   // HSU KG_HSU_HASH_EK constrained read authorization
@@ -104,12 +105,12 @@ module poly_mem_subsystem #(
   input  logic [3:0]                         hsu_wr_en,
   input  logic [$clog2(NUM_POLYS)-1:0]       hsu_wr_poly_id,
   input  logic [3:0][$clog2(NCOEFF)-1:0]     hsu_wr_idx,
-  input  logic [3:0][W-1:0]                  hsu_wr_data,
+  input  logic [3:0][COEFF_W-1:0]            hsu_wr_data,
   output logic                               hsu_rd_valid,
   output logic [$clog2(NUM_POLYS)-1:0]       hsu_rd_poly_id_o,
   output logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx_o,
   output logic [3:0]                         hsu_rd_lane_valid_o,
-  output logic [3:0][W-1:0]                  hsu_rd_data,
+  output logic [3:0][COEFF_W-1:0]            hsu_rd_data,
   output logic                               hsu_stall,
 
   // ==========================================================================
@@ -123,12 +124,12 @@ module poly_mem_subsystem #(
   input  logic [3:0]                         tr_wr_en,
   input  logic [$clog2(NUM_POLYS)-1:0]       tr_wr_poly_id,
   input  logic [3:0][$clog2(NCOEFF)-1:0]     tr_wr_idx,
-  input  logic [3:0][W-1:0]                  tr_wr_data,
+  input  logic [3:0][COEFF_W-1:0]            tr_wr_data,
   output logic                               tr_rd_valid,
   output logic [$clog2(NUM_POLYS)-1:0]       tr_rd_poly_id_o,
   output logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx_o,
   output logic [3:0]                         tr_rd_lane_valid_o,
-  output logic [3:0][W-1:0]                  tr_rd_data,
+  output logic [3:0][COEFF_W-1:0]            tr_rd_data,
   output logic                               tr_stall,
 
   // ==========================================================================
@@ -157,7 +158,7 @@ module poly_mem_subsystem #(
 );
 
   localparam int POLY_W             = $clog2(NUM_POLYS);
-  localparam int COEFF_W            = $clog2(NCOEFF);
+  localparam int COEFF_ADDR_W       = $clog2(NCOEFF);
   localparam int ROWS_PER_POLY_BANK = NCOEFF / 4;
   localparam int ROW_W              = $clog2(ROWS_PER_POLY_BANK);
   localparam int SEED_AW            = $clog2(SEED_DEPTH);
@@ -202,7 +203,7 @@ module poly_mem_subsystem #(
   // The wrapper remains authoritative for the actual bank/row access.
   // --------------------------------------------------------------------------
   function automatic [1:0] mem_bank_idx(
-    input logic [COEFF_W-1:0] order
+    input logic [COEFF_ADDR_W-1:0] order
   );
     logic [3:0] sum;
     begin
@@ -213,7 +214,7 @@ module poly_mem_subsystem #(
 
   function automatic [BANK_AW-1:0] mem_bank_addr(
     input logic [POLY_W-1:0] pid,
-    input logic [COEFF_W-1:0] order
+    input logic [COEFF_ADDR_W-1:0] order
   );
     logic [ROW_W-1:0] row;
     begin
@@ -224,7 +225,7 @@ module poly_mem_subsystem #(
 
   function automatic logic req_has_conflict(
     input logic [POLY_W-1:0]        poly_id,
-    input logic [3:0][COEFF_W-1:0] idx,
+    input logic [3:0][COEFF_ADDR_W-1:0] idx,
     input logic [3:0]              lane_mask
   );
     logic [3:0][1:0]         bank;
@@ -248,11 +249,11 @@ module poly_mem_subsystem #(
   function automatic logic req_pair_legal(
     input logic                     a_is_wr,
     input logic [POLY_W-1:0]        a_poly_id,
-    input logic [3:0][COEFF_W-1:0] a_idx,
+    input logic [3:0][COEFF_ADDR_W-1:0] a_idx,
     input logic [3:0]              a_lane_mask,
     input logic                     b_is_wr,
     input logic [POLY_W-1:0]        b_poly_id,
-    input logic [3:0][COEFF_W-1:0] b_idx,
+    input logic [3:0][COEFF_ADDR_W-1:0] b_idx,
     input logic [3:0]              b_lane_mask
   );
     logic [3:0][1:0]         a_bank, b_bank;
@@ -332,12 +333,21 @@ module poly_mem_subsystem #(
   assign tr_single_req = (tr_rd_req || tr_wr_req) && ~tr_both_req;
 
   logic wipe_active;
-  logic [COEFF_W-1:0] wipe_base_idx;
+  logic [COEFF_ADDR_W-1:0] wipe_base_idx;
   assign wipe_active     = (wipe_state_q != WIPE_IDLE);
-  assign wipe_base_idx   = COEFF_W'({wipe_row_q, 2'b00});
+  assign wipe_base_idx   = COEFF_ADDR_W'({wipe_row_q, 2'b00});
   assign wipe_busy_o     = wipe_active;
   assign mem_fault_o     = mem_fault_q;
   assign mem_fault_code_o = mem_fault_code_q;
+
+  // 12-bit Coefficient Formatting Helpers
+  function automatic [3:0][COEFF_W-1:0] mask_coeff(input [3:0][W-1:0] data);
+    for (int i=0; i<4; i++) mask_coeff[i] = data[i][COEFF_W-1:0];
+  endfunction
+
+  function automatic [3:0][W-1:0] pad_coeff(input [3:0][COEFF_W-1:0] data);
+    for (int i=0; i<4; i++) pad_coeff[i] = { {(W-COEFF_W){1'b0}}, data[i] };
+  endfunction
 
   // --------------------------------------------------------------------------
   // Combined-owner detection
@@ -361,8 +371,8 @@ module poly_mem_subsystem #(
   logic        pau_is_wr_req, pau_aux_is_wr_req, hsu_is_wr_req, tr_is_wr_req;
   logic [POLY_W-1:0]        pau_poly_id_req, pau_aux_poly_id_req;
   logic [POLY_W-1:0]        hsu_poly_id_req, tr_poly_id_req;
-  logic [3:0][COEFF_W-1:0] pau_idx_req, pau_aux_idx_req;
-  logic [3:0][COEFF_W-1:0] hsu_idx_req, tr_idx_req;
+  logic [3:0][COEFF_ADDR_W-1:0] pau_idx_req, pau_aux_idx_req;
+  logic [3:0][COEFF_ADDR_W-1:0] hsu_idx_req, tr_idx_req;
   logic [3:0]              pau_lane_mask_req, pau_aux_lane_mask_req;
   logic [3:0]              hsu_lane_mask_req, tr_lane_mask_req;
   logic [3:0][W-1:0]       pau_data_req, pau_aux_data_req;
@@ -394,10 +404,10 @@ module poly_mem_subsystem #(
                                (hsu_rd_allowed_req ? hsu_rd_lane_valid : '0);
   assign tr_lane_mask_req    = tr_wr_req  ? tr_wr_en  : tr_rd_lane_valid;
 
-  assign pau_data_req        = pau_wr_data;
-  assign pau_aux_data_req    = pau_aux_wr_data;
-  assign hsu_data_req        = hsu_wr_data;
-  assign tr_data_req         = tr_wr_data;
+  assign pau_data_req        = pad_coeff(pau_wr_data);
+  assign pau_aux_data_req    = pad_coeff(pau_aux_wr_data);
+  assign hsu_data_req        = pad_coeff(hsu_wr_data);
+  assign tr_data_req         = pad_coeff(tr_wr_data);
 
   assign pau_conflict_req    = req_has_conflict(pau_poly_id_req, pau_idx_req, pau_lane_mask_req);
   assign pau_aux_conflict_req = req_has_conflict(pau_aux_poly_id_req, pau_aux_idx_req,
@@ -418,7 +428,7 @@ module poly_mem_subsystem #(
   client_owner_e p0_sel_owner, p1_sel_owner;
   req_kind_e     p0_sel_kind,  p1_sel_kind;
   logic [POLY_W-1:0]        p0_sel_poly_id, p1_sel_poly_id;
-  logic [3:0][COEFF_W-1:0] p0_sel_idx,     p1_sel_idx;
+  logic [3:0][COEFF_ADDR_W-1:0] p0_sel_idx,     p1_sel_idx;
   logic [3:0]              p0_sel_lane_mask, p1_sel_lane_mask;
   logic [3:0][W-1:0]       p0_sel_data,    p1_sel_data;
   logic                    p0_sel_conflict;
@@ -550,7 +560,7 @@ module poly_mem_subsystem #(
   logic [POLY_W-1:0]        p0_poly_id_mux, p1_poly_id_mux;
   logic                     p0_v_mux,       p1_v_mux;
   logic [3:0]               p0_wr_en_mux,   p1_wr_en_mux;
-  logic [3:0][COEFF_W-1:0] p0_idx_mux,     p1_idx_mux;
+  logic [3:0][COEFF_ADDR_W-1:0] p0_idx_mux,     p1_idx_mux;
   logic [3:0]               p0_lane_valid_mux, p1_lane_valid_mux;
   logic [3:0][W-1:0]        p0_data_mux,    p1_data_mux;
 
@@ -578,10 +588,10 @@ module poly_mem_subsystem #(
       p0_poly_id_mux    = wipe_poly_q;
       p0_v_mux          = 1'b1;
       p0_wr_en_mux      = 4'b1111;
-      p0_idx_mux[0]     = wipe_base_idx + COEFF_W'(0);
-      p0_idx_mux[1]     = wipe_base_idx + COEFF_W'(1);
-      p0_idx_mux[2]     = wipe_base_idx + COEFF_W'(2);
-      p0_idx_mux[3]     = wipe_base_idx + COEFF_W'(3);
+      p0_idx_mux[0]     = wipe_base_idx + COEFF_ADDR_W'(0);
+      p0_idx_mux[1]     = wipe_base_idx + COEFF_ADDR_W'(1);
+      p0_idx_mux[2]     = wipe_base_idx + COEFF_ADDR_W'(2);
+      p0_idx_mux[3]     = wipe_base_idx + COEFF_ADDR_W'(3);
       p0_data_mux       = '0;
     end else if (combo_any) begin
       p0_v_mux          = 1'b1;
@@ -722,7 +732,7 @@ module poly_mem_subsystem #(
   logic p0_ready, p1_ready;
   logic p0_rd_valid_int, p1_rd_valid_int;
   logic [POLY_W-1:0]        p0_rd_poly_id_int, p1_rd_poly_id_int;
-  logic [3:0][COEFF_W-1:0] p0_rd_idx_int,     p1_rd_idx_int;
+  logic [3:0][COEFF_ADDR_W-1:0] p0_rd_idx_int,     p1_rd_idx_int;
   logic [3:0]               p0_rd_lane_valid_int, p1_rd_lane_valid_int;
   logic [3:0][W-1:0]        p0_rd_data_int,    p1_rd_data_int;
 
@@ -910,28 +920,28 @@ module poly_mem_subsystem #(
           pau_rd_poly_id_o    = p0_rd_poly_id_int;
           pau_rd_idx_o        = p0_rd_idx_int;
           pau_rd_lane_valid_o = p0_rd_lane_valid_int;
-          pau_rd_data         = p0_rd_data_int;
+          pau_rd_data         = mask_coeff(p0_rd_data_int);
         end
         OWNER_PAU_AUX: begin
           pau_aux_rd_valid        = 1'b1;
           pau_aux_rd_poly_id_o    = p0_rd_poly_id_int;
           pau_aux_rd_idx_o        = p0_rd_idx_int;
           pau_aux_rd_lane_valid_o = p0_rd_lane_valid_int;
-          pau_aux_rd_data         = p0_rd_data_int;
+          pau_aux_rd_data         = mask_coeff(p0_rd_data_int);
         end
         OWNER_HSU: begin
           hsu_rd_valid        = 1'b1;
           hsu_rd_poly_id_o    = p0_rd_poly_id_int;
           hsu_rd_idx_o        = p0_rd_idx_int;
           hsu_rd_lane_valid_o = p0_rd_lane_valid_int;
-          hsu_rd_data         = p0_rd_data_int;
+          hsu_rd_data         = mask_coeff(p0_rd_data_int);
         end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;
           tr_rd_poly_id_o     = p0_rd_poly_id_int;
           tr_rd_idx_o         = p0_rd_idx_int;
           tr_rd_lane_valid_o  = p0_rd_lane_valid_int;
-          tr_rd_data          = p0_rd_data_int;
+          tr_rd_data          = mask_coeff(p0_rd_data_int);
         end
         default: begin
         end
@@ -945,28 +955,28 @@ module poly_mem_subsystem #(
           pau_rd_poly_id_o    = p1_rd_poly_id_int;
           pau_rd_idx_o        = p1_rd_idx_int;
           pau_rd_lane_valid_o = p1_rd_lane_valid_int;
-          pau_rd_data         = p1_rd_data_int;
+          pau_rd_data         = mask_coeff(p1_rd_data_int);
         end
         OWNER_PAU_AUX: begin
           pau_aux_rd_valid        = 1'b1;
           pau_aux_rd_poly_id_o    = p1_rd_poly_id_int;
           pau_aux_rd_idx_o        = p1_rd_idx_int;
           pau_aux_rd_lane_valid_o = p1_rd_lane_valid_int;
-          pau_aux_rd_data         = p1_rd_data_int;
+          pau_aux_rd_data         = mask_coeff(p1_rd_data_int);
         end
         OWNER_HSU: begin
           hsu_rd_valid        = 1'b1;
           hsu_rd_poly_id_o    = p1_rd_poly_id_int;
           hsu_rd_idx_o        = p1_rd_idx_int;
           hsu_rd_lane_valid_o = p1_rd_lane_valid_int;
-          hsu_rd_data         = p1_rd_data_int;
+          hsu_rd_data         = mask_coeff(p1_rd_data_int);
         end
         OWNER_TR: begin
           tr_rd_valid         = 1'b1;
           tr_rd_poly_id_o     = p1_rd_poly_id_int;
           tr_rd_idx_o         = p1_rd_idx_int;
           tr_rd_lane_valid_o  = p1_rd_lane_valid_int;
-          tr_rd_data          = p1_rd_data_int;
+          tr_rd_data          = mask_coeff(p1_rd_data_int);
         end
         default: begin
         end
