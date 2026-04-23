@@ -1,4 +1,6 @@
 package qrem_seed_map_pkg;
+  import qrem_global_pkg::*;
+  export qrem_global_pkg::*;
 
   // ---------------------------------------------------------------------------
   // Seed / protocol store sizing
@@ -21,16 +23,8 @@ package qrem_seed_map_pkg;
   localparam int QREM_NUM_SEED_IDS = 8;
   localparam int QREM_SEED_BEATS   = QREM_WORDS_256B;
 
-  typedef enum logic [2:0] {
-    SEED_ID_D     = 3'd0,
-    SEED_ID_Z     = 3'd1,
-    SEED_ID_M     = 3'd2,
-    SEED_ID_RHO   = 3'd3,
-    SEED_ID_SIGMA = 3'd4,
-    SEED_ID_HEK   = 3'd5,
-    SEED_ID_SS    = 3'd6,
-    SEED_ID_TMP   = 3'd7
-  } seed_id_e;
+  // seed_id_e is now imported from qrem_global_pkg
+
 
   // ---------------------------------------------------------------------------
   // 256-bit protocol-object base addresses
