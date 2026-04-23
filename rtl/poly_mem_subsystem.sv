@@ -27,16 +27,17 @@
  *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
  */
 
+import qrem_global_pkg::*;
 import qrem_mem_map_pkg::*;
 import qrem_seed_map_pkg::*;
 
 module poly_mem_subsystem #(
-  parameter int NUM_POLYS  = 32,
-  parameter int NCOEFF     = 256,
+  parameter int NUM_POLYS  = qrem_global_pkg::NUM_POLYS,
+  parameter int NCOEFF     = qrem_global_pkg::NCOEFF,
   parameter int W          = 16,
-  parameter int COEFF_W    = 12,
-  parameter int SEED_DEPTH = QREM_SEED_DEPTH,
-  parameter int SEED_W     = QREM_SEED_W
+  parameter int COEFF_W    = qrem_global_pkg::COEFF_WIDTH,
+  parameter int SEED_DEPTH = qrem_global_pkg::SEED_DEPTH,
+  parameter int SEED_W     = qrem_global_pkg::SEED_W
 )(
   input  logic clk,
   input  logic rst,
@@ -138,7 +139,7 @@ module poly_mem_subsystem #(
   input  logic                               hsu_seed_req,
   input  logic                               hsu_seed_we,
   input  seed_id_e                           hsu_seed_id,
-  input  logic [$clog2(QREM_SEED_BEATS)-1:0] hsu_seed_idx,
+  input  logic [$clog2(SEED_BEATS)-1:0]      hsu_seed_idx,
   input  logic [SEED_W-1:0]                  hsu_seed_wdata,
   output logic                               hsu_seed_ready,
   output logic                               hsu_seed_rvalid,
@@ -150,7 +151,7 @@ module poly_mem_subsystem #(
   input  logic                               tr_seed_req,
   input  logic                               tr_seed_we,
   input  seed_id_e                           tr_seed_id,
-  input  logic [$clog2(QREM_SEED_BEATS)-1:0] tr_seed_idx,
+  input  logic [$clog2(SEED_BEATS)-1:0]      tr_seed_idx,
   input  logic [SEED_W-1:0]                  tr_seed_wdata,
   output logic                               tr_seed_ready,
   output logic                               tr_seed_rvalid,
@@ -163,20 +164,6 @@ module poly_mem_subsystem #(
   localparam int ROW_W              = $clog2(ROWS_PER_POLY_BANK);
   localparam int SEED_AW            = $clog2(SEED_DEPTH);
   localparam int BANK_AW            = $clog2(NUM_POLYS * ROWS_PER_POLY_BANK);
-
-  typedef enum logic [2:0] {
-    OWNER_NONE    = 3'd0,
-    OWNER_PAU     = 3'd1,
-    OWNER_PAU_AUX = 3'd2,
-    OWNER_HSU     = 3'd3,
-    OWNER_TR      = 3'd4
-  } client_owner_e;
-
-  typedef enum logic [1:0] {
-    REQ_NONE  = 2'd0,
-    REQ_READ  = 2'd1,
-    REQ_WRITE = 2'd2
-  } req_kind_e;
 
   typedef enum logic [1:0] {
     WIPE_IDLE = 2'd0,

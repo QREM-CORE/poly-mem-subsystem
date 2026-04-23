@@ -28,10 +28,12 @@
  *   - Same-request lane conflicts remain illegal.
  */
 
+import qrem_global_pkg::*;
+
 module poly_mem_wrapper_4bank #(
-  parameter int N         = 256,
+  parameter int N         = qrem_global_pkg::NCOEFF,
   parameter int W         = 16,
-  parameter int NUM_POLYS = 32
+  parameter int NUM_POLYS = qrem_global_pkg::NUM_POLYS
 )(
   input  logic clk,
   input  logic rst,

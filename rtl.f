@@ -1,4 +1,5 @@
 # 1. Submodules (i.e. -f lib/keccak-fips202-sv/rtl.f)
+-f lib/common-rtl/rtl.f
 
 # 2. Local Packages (i.e., rtl/my_pkg.sv)
 rtl/qrem_mem_map_pkg.sv
