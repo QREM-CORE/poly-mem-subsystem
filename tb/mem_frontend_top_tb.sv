@@ -893,8 +893,45 @@ module mem_frontend_top_tb;
     read_poly_with_pau(POLY_ID_WORK4, 28, 29, 30, 31,
                        16'hE500, 16'hE501, 16'hE502, 16'hE503);
 
+    tick();
+
     // ------------------------------------------------------------------
-    // 15) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
+    // 15) Illegal PAU primary combined read/write to the same address.
+    //     This differs from test 4: primary+aux illegal pairings are
+    //     scheduler-filtered before issue, but a primary combined request
+    //     owns both wrapper ports atomically. The observed Memory behavior is
+    //     PAU stall, no read response, and MEM_FAULT_RW_SAME_ADDR code 3'b001.
+    // ------------------------------------------------------------------
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_ID_S2;
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_lane_valid = 4'b0001;
+    pau_wr_en         = 4'b0001;
+    pau_wr_poly_id    = POLY_ID_S2;
+    pau_wr_idx[0]     = COEFF_W'(0);
+    pau_wr_data[0]    = 16'hBAD2;
+    #1;
+
+    if (!pau_stall)
+      $fatal(1, "Illegal PAU primary combined same-address request should stall");
+    if (pau_rd_valid || pau_aux_rd_valid)
+      $fatal(1, "Illegal PAU primary combined same-address request should not respond early");
+    tick();
+    if (pau_rd_valid || pau_aux_rd_valid)
+      $fatal(1, "Illegal PAU primary combined same-address request should not return data");
+    if (!mem_fault_o || mem_fault_code_o !== 3'b001)
+      $fatal(1, "Expected PAU primary combined same-address fault code 3'b001");
+    clear_poly_clients();
+    tick();
+    if (mem_fault_o || mem_fault_code_o !== 3'b000)
+      $fatal(1, "PAU primary combined same-address fault should clear after request removal");
+
+    read_poly_with_pau(POLY_ID_S2, 0, 1, 2, 3,
+                       16'h1200, 16'h1201, 16'h1202, 16'h1203);
+
+    // ------------------------------------------------------------------
+    // 16) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
@@ -928,7 +965,7 @@ module mem_frontend_top_tb;
                       16'h6100, 16'h6101, 16'h6102, 16'h6103);
 
     // ------------------------------------------------------------------
-    // 16) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
+    // 17) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
     //    Final row commit lands in t[i].
     // ------------------------------------------------------------------
     hsu_req        = 1'b1;
@@ -979,7 +1016,7 @@ module mem_frontend_top_tb;
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
 
     // ------------------------------------------------------------------
-    // 17) Seed/protocol store uses semantic ID + beat mapping at Memory.
+    // 18) Seed/protocol store uses semantic ID + beat mapping at Memory.
     // ------------------------------------------------------------------
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
@@ -1014,7 +1051,7 @@ module mem_frontend_top_tb;
       $fatal(1, "H(ek) protocol-store readback mismatch");
 
     // ------------------------------------------------------------------
-    // 18) Illegal cross-client same-address collisions are conservatively
+    // 19) Illegal cross-client same-address collisions are conservatively
     //    rejected by the scheduler before issue; the admitted request still
     //    completes deterministically without undefined memory semantics.
     // ------------------------------------------------------------------
@@ -1043,7 +1080,7 @@ module mem_frontend_top_tb;
     clear_poly_clients();
 
     // ------------------------------------------------------------------
-    // 19) Wipe blocks all users and clears both poly + protocol storage.
+    // 20) Wipe blocks all users and clears both poly + protocol storage.
     // ------------------------------------------------------------------
     wipe_i = 1'b1;
     tick();
