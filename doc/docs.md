@@ -255,7 +255,7 @@ Expected output: `TB PASS`
 
 ## 12. Practical Notes
 
-- The shared `make` flow depends on the `build-tools` submodule being initialized.
+- The shared `make` flow depends on the `build-tools` and `lib/common-rtl` submodules being initialized (`lib/common-rtl` provides `qrem_global_pkg`).
 - The verified local smoke path in this checkout used `iverilog` and `vvp`.
 - This pass intentionally does not modify PAU RTL.
 - PAU still needs a follow-on update for the richer source/destination contract implied by row-wise MAC-heavy flows.

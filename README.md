@@ -152,7 +152,7 @@ The repo includes:
 
 Expected output is `TB PASS`.
 
-The shared `make` flow depends on the `build-tools` submodule being initialized in the local checkout. For direct local smoke checks, the updated benches compile and run with `iverilog` / `vvp`.
+The shared `make` flow depends on the `build-tools` and `lib/common-rtl` submodules being initialized in the local checkout (the latter provides `qrem_global_pkg`). For direct local smoke checks, the updated benches compile and run with `iverilog` / `vvp`.
 
 ## Documentation
 
