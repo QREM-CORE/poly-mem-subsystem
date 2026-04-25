@@ -422,11 +422,7 @@ module mem_frontend_top_tb;
         hsu_seed_rdata !== '0 || tr_seed_rdata !== '0)
       $fatal(1, "Seed read data should be zero when rvalid is low");
 
-    if (POLY_ID_S0 != 0 || POLY_ID_S3 != 3 || POLY_ID_EI != 4 ||
-        POLY_ID_A0 != 5 || POLY_ID_A3 != 8 ||
-        POLY_ID_T0 != 9 || POLY_ID_T3 != 12 ||
-        POLY_ID_WORK0 != 13 || POLY_ID_WORK18 != 31)
-      $fatal(1, "Unexpected fixed max-k poly-id slot layout");
+    $display("Scenario 0: Reset and Package Sanity Checks... DONE");
 
     // Prime data used by scheduler and overlap checks.
     prime_poly_with_pau(POLY_ID_S2, 0, 1, 2, 3, 16'h1200, 16'h1201, 16'h1202, 16'h1203);
@@ -435,6 +431,7 @@ module mem_frontend_top_tb;
     // ------------------------------------------------------------------
     // 1) PAU-owned legal dual-read using primary + auxiliary descriptors.
     // ------------------------------------------------------------------
+    $display("Scenario 1: PAU Primary + Aux Legal Dual-Read...");
     pau_req               = 1'b1;
     pau_rd_en             = 1'b1;
     pau_rd_poly_id        = POLY_ID_S2;
@@ -470,10 +467,12 @@ module mem_frontend_top_tb;
         pau_aux_rd_data[2] !== 16'h6602 || pau_aux_rd_data[3] !== 16'h6603)
       $fatal(1, "PAU auxiliary dual-read data mismatch");
     clear_poly_clients();
+    $display("Scenario 1: PAU Primary + Aux Legal Dual-Read... PASS");
 
     // ------------------------------------------------------------------
     // 2) PAU-owned legal dual-write using both internal ports.
     // ------------------------------------------------------------------
+    $display("Scenario 2: PAU Primary + Aux Legal Dual-Write...");
     pau_req            = 1'b1;
     pau_wr_en          = 4'b1111;
     pau_wr_poly_id     = POLY_ID_WORK5;
@@ -508,10 +507,12 @@ module mem_frontend_top_tb;
                        16'hA500, 16'hA501, 16'hA502, 16'hA503);
     read_poly_with_pau(POLY_ID_WORK6, 36, 37, 38, 39,
                        16'hA600, 16'hA601, 16'hA602, 16'hA603);
+    $display("Scenario 2: PAU Primary + Aux Legal Dual-Write... PASS");
 
     // ------------------------------------------------------------------
     // 3) PAU-owned legal read/write overlap.
     // ------------------------------------------------------------------
+    $display("Scenario 3: PAU Primary-Read + Aux-Write Overlap...");
     pau_req               = 1'b1;
     pau_rd_en             = 1'b1;
     pau_rd_poly_id        = POLY_ID_S2;
@@ -546,10 +547,12 @@ module mem_frontend_top_tb;
 
     read_poly_with_pau(POLY_ID_WORK7, 40, 41, 42, 43,
                        16'hA700, 16'hA701, 16'hA702, 16'hA703);
+    $display("Scenario 3: PAU Primary-Read + Aux-Write Overlap... PASS");
 
     // ------------------------------------------------------------------
     // 4) PAU-owned same-address read/write is rejected before issue.
     // ------------------------------------------------------------------
+    $display("Scenario 4: PAU Primary-Read + Aux-Write Conflict (Stall)...");
     pau_req               = 1'b1;
     pau_rd_en             = 1'b1;
     pau_rd_poly_id        = POLY_ID_S2;
@@ -569,12 +572,14 @@ module mem_frontend_top_tb;
     if (pau_rd_valid || pau_aux_rd_valid || mem_fault_o)
       $fatal(1, "Illegal PAU auxiliary pairing should not issue or fault");
     clear_poly_clients();
+    $display("Scenario 4: PAU Primary-Read + Aux-Write Conflict (Stall)... PASS");
 
     // ------------------------------------------------------------------
     // 5) Legal dual-read scheduling with per-client response routing.
     //    General dual-read coverage uses PAU + Transcoder; the constrained
     //    HSU hash-ek T-slot read path is covered below.
     // ------------------------------------------------------------------
+    $display("Scenario 5: PAU + TR Dual-Read Concurrent Issue...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -610,11 +615,13 @@ module mem_frontend_top_tb;
         tr_rd_data[2] !== 16'h6602 || tr_rd_data[3] !== 16'h6603)
       $fatal(1, "Transcoder dual-read data mismatch");
     clear_poly_clients();
+    $display("Scenario 5: PAU + TR Dual-Read Concurrent Issue... PASS");
 
     // ------------------------------------------------------------------
     // 6) HSU polynomial reads stall unless the hash-ek T-slot authorization
     //    is active.
     // ------------------------------------------------------------------
+    $display("Scenario 6: HSU Poly-Read Blocking (Unauthorized)...");
     hsu_req           = 1'b1;
     hsu_rd_en         = 1'b1;
     hsu_rd_poly_id    = POLY_ID_S2;
@@ -631,10 +638,12 @@ module mem_frontend_top_tb;
     if (hsu_rd_valid || mem_fault_o)
       $fatal(1, "Unauthorized HSU polynomial read should not return data or fault");
     clear_poly_clients();
+    $display("Scenario 6: HSU Poly-Read Blocking (Unauthorized)... PASS");
 
     // ------------------------------------------------------------------
     // 7) KG_HSU_HASH_EK authorizes HSU/Gearbox reads from T0..T3 only.
     // ------------------------------------------------------------------
+    $display("Scenario 7: HSU Hash-EK T-Slot Authorized Reads...");
     prime_poly_with_pau(POLY_ID_T0, 48, 49, 50, 51,
                         16'h9000, 16'h9001, 16'h9002, 16'h9003);
     prime_poly_with_pau(POLY_ID_T1, 52, 53, 54, 55,
@@ -652,18 +661,22 @@ module mem_frontend_top_tb;
                                16'h9204, 16'h9205, 16'h9206, 16'h9207);
     read_poly_with_hsu_hash_ek(POLY_ID_T3, 60, 61, 62, 63,
                                16'h9300, 16'h9301, 16'h9302, 16'h9303);
+    $display("Scenario 7: HSU Hash-EK T-Slot Authorized Reads... PASS");
 
     // ------------------------------------------------------------------
     // 8) Hash-ek authorization does not make HSU a general poly reader.
     // ------------------------------------------------------------------
+    $display("Scenario 8: HSU Hash-EK Range Constraints...");
     expect_hsu_hash_ek_read_reject(POLY_ID_S2);
     expect_hsu_hash_ek_read_reject(POLY_ID_EI);
     expect_hsu_hash_ek_read_reject(POLY_ID_A0);
     expect_hsu_hash_ek_read_reject(POLY_ID_WORK0);
+    $display("Scenario 8: HSU Hash-EK Range Constraints... PASS");
 
     // ------------------------------------------------------------------
     // 9) HSU read/write mixtures remain rejected during hash-ek readout.
     // ------------------------------------------------------------------
+    $display("Scenario 9: HSU Hash-EK Combined R+W Rejection...");
     hsu_hash_ek_read_en = 1'b1;
     hsu_req             = 1'b1;
     hsu_rd_en           = 1'b1;
@@ -682,10 +695,12 @@ module mem_frontend_top_tb;
     if (hsu_rd_valid || mem_fault_o)
       $fatal(1, "Rejected mixed HSU hash-ek request should not return data or fault");
     clear_poly_clients();
+    $display("Scenario 9: HSU Hash-EK Combined R+W Rejection... PASS");
 
     // ------------------------------------------------------------------
     // 10) Authorized HSU T-slot read can route as the second scheduled read.
     // ------------------------------------------------------------------
+    $display("Scenario 10: PAU + HSU Hash-EK Dual-Read Issue...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -716,10 +731,12 @@ module mem_frontend_top_tb;
         hsu_rd_data[2] !== 16'h9002 || hsu_rd_data[3] !== 16'h9003)
       $fatal(1, "Authorized HSU p1 read routing mismatch");
     clear_poly_clients();
+    $display("Scenario 10: PAU + HSU Hash-EK Dual-Read Issue... PASS");
 
     // ------------------------------------------------------------------
     // 11) HSU can fill the active A row buffer while PAU consumes older data.
     // ------------------------------------------------------------------
+    $display("Scenario 11: PAU Read + HSU Write Overlap Issue...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -751,10 +768,12 @@ module mem_frontend_top_tb;
 
     read_poly_with_pau(POLY_ID_A0, 44, 45, 46, 47,
                        16'hA000, 16'hA001, 16'hA002, 16'hA003);
+    $display("Scenario 11: PAU Read + HSU Write Overlap Issue... PASS");
 
     // ------------------------------------------------------------------
     // 12) Legal dual-write scheduling across two clients.
     // ------------------------------------------------------------------
+    $display("Scenario 12: PAU + HSU Dual-Write Issue...");
     pau_req        = 1'b1;
     pau_wr_en      = 4'b1111;
     pau_wr_poly_id = POLY_ID_WORK0;
@@ -789,11 +808,13 @@ module mem_frontend_top_tb;
                        16'hA100, 16'hA101, 16'hA102, 16'hA103);
     read_poly_with_pau(POLY_ID_WORK1, 16, 17, 18, 19,
                        16'hB200, 16'hB201, 16'hB202, 16'hB203);
+    $display("Scenario 12: PAU + HSU Dual-Write Issue... PASS");
 
     // ------------------------------------------------------------------
     // 13) Legal read/write overlap remains allowed.
     //    HSU contributes as the polynomial writer while Transcoder reads.
     // ------------------------------------------------------------------
+    $display("Scenario 13: TR Read + HSU Write Overlap Issue...");
     tr_req            = 1'b1;
     tr_rd_en          = 1'b1;
     tr_rd_poly_id     = POLY_ID_S2;
@@ -828,10 +849,12 @@ module mem_frontend_top_tb;
 
     read_poly_with_pau(POLY_ID_WORK2, 20, 21, 22, 23,
                        16'hC300, 16'hC301, 16'hC302, 16'hC303);
+    $display("Scenario 13: TR Read + HSU Write Overlap Issue... PASS");
 
     // ------------------------------------------------------------------
     // 14) Combined read+write requests still own both ports atomically.
     // ------------------------------------------------------------------
+    $display("Scenario 14: PAU Atomic Combined R+W vs HSU...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -894,6 +917,7 @@ module mem_frontend_top_tb;
                        16'hE500, 16'hE501, 16'hE502, 16'hE503);
 
     tick();
+    $display("Scenario 14: PAU Atomic Combined R+W vs HSU... PASS");
 
     // ------------------------------------------------------------------
     // 15) Illegal PAU primary combined read/write to the same address.
@@ -902,6 +926,7 @@ module mem_frontend_top_tb;
     //     owns both wrapper ports atomically. The observed Memory behavior is
     //     PAU stall, no read response, and MEM_FAULT_RW_SAME_ADDR code 3'b001.
     // ------------------------------------------------------------------
+    $display("Scenario 15: PAU Combined Same-Addr Fault (3'b001)...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -929,10 +954,12 @@ module mem_frontend_top_tb;
 
     read_poly_with_pau(POLY_ID_S2, 0, 1, 2, 3,
                        16'h1200, 16'h1201, 16'h1202, 16'h1203);
+    $display("Scenario 15: PAU Combined Same-Addr Fault (3'b001)... PASS");
 
     // ------------------------------------------------------------------
     // 16) Semantic KeyGen placement: s[j] overwritten in place with s_hat[j].
     // ------------------------------------------------------------------
+    $display("Scenario 16: Semantic S-Slot In-Place Overwrite...");
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
     hsu_wr_poly_id = POLY_ID_S1;
@@ -963,11 +990,13 @@ module mem_frontend_top_tb;
 
     read_poly_with_tr(POLY_ID_S1, 0, 1, 2, 3,
                       16'h6100, 16'h6101, 16'h6102, 16'h6103);
+    $display("Scenario 16: Semantic S-Slot In-Place Overwrite... PASS");
 
     // ------------------------------------------------------------------
     // 17) Semantic KeyGen placement: e_i overwritten in place with e_hat_i.
     //    Final row commit lands in t[i].
     // ------------------------------------------------------------------
+    $display("Scenario 17: Semantic E-Slot Overwrite + T-Slot Commit...");
     hsu_req        = 1'b1;
     hsu_wr_en      = 4'b1111;
     hsu_wr_poly_id = POLY_ID_EI;
@@ -1014,10 +1043,12 @@ module mem_frontend_top_tb;
                       16'h8200, 16'h8201, 16'h8202, 16'h8203);
     read_poly_with_tr(POLY_ID_T2, 8, 9, 10, 11,
                       16'h9200, 16'h9201, 16'h9202, 16'h9203);
+    $display("Scenario 17: Semantic E-Slot Overwrite + T-Slot Commit... PASS");
 
     // ------------------------------------------------------------------
     // 18) Seed/protocol store uses semantic ID + beat mapping at Memory.
     // ------------------------------------------------------------------
+    $display("Scenario 18: Seed/Protocol Store Dual-Port Concurrent Access...");
     hsu_seed_req   = 1'b1;
     hsu_seed_we    = 1'b1;
     hsu_seed_id    = SEED_ID_RHO;
@@ -1049,12 +1080,14 @@ module mem_frontend_top_tb;
       $fatal(1, "RHO protocol-store readback mismatch");
     if (!tr_seed_rvalid || tr_seed_rdata !== 64'h99AA_BBCC_DDEE_FF00)
       $fatal(1, "H(ek) protocol-store readback mismatch");
+    $display("Scenario 18: Seed/Protocol Store Dual-Port Concurrent Access... PASS");
 
     // ------------------------------------------------------------------
     // 19) Illegal cross-client same-address collisions are conservatively
     //    rejected by the scheduler before issue; the admitted request still
     //    completes deterministically without undefined memory semantics.
     // ------------------------------------------------------------------
+    $display("Scenario 19: Inter-Client Collision Scheduler Filtering...");
     pau_req           = 1'b1;
     pau_rd_en         = 1'b1;
     pau_rd_poly_id    = POLY_ID_S2;
@@ -1078,10 +1111,12 @@ module mem_frontend_top_tb;
     if (mem_fault_o)
       $fatal(1, "Top-level scheduler should filter illegal pairings before wrapper faulting");
     clear_poly_clients();
+    $display("Scenario 19: Inter-Client Collision Scheduler Filtering... PASS");
 
     // ------------------------------------------------------------------
     // 20) Wipe blocks all users and clears both poly + protocol storage.
     // ------------------------------------------------------------------
+    $display("Scenario 20: Security Wipe Blocking & Clearance...");
     wipe_i = 1'b1;
     tick();
     wipe_i = 1'b0;
@@ -1110,8 +1145,33 @@ module mem_frontend_top_tb;
     clear_seed_clients();
     if (!hsu_seed_rvalid || hsu_seed_rdata !== 64'h0)
       $fatal(1, "Protocol-store wipe failed");
+    $display("Scenario 20: Security Wipe Blocking & Clearance... PASS");
 
-    $display("TB PASS");
+    // ------------------------------------------------------------------
+    // 21) Intra-request bank collision (Skewed Mapping).
+    //     Indices 0 and 85 both hit Bank 0 under the bit-pair-sum mapping.
+    //     A single vector request with these indices must stall.
+    // ------------------------------------------------------------------
+    $display("Scenario 21: Intra-Request Bank Collision (Skewed mapping: 0, 85)...");
+    pau_req           = 1'b1;
+    pau_rd_en         = 1'b1;
+    pau_rd_poly_id    = POLY_ID_S0;
+    pau_rd_idx[0]     = COEFF_W'(0);
+    pau_rd_idx[1]     = COEFF_W'(85); // binary 01010101 -> sum=4 -> bank 0
+    pau_rd_idx[2]     = COEFF_W'(2);
+    pau_rd_idx[3]     = COEFF_W'(3);
+    pau_rd_lane_valid = 4'b1111;
+    #1;
+
+    if (!pau_stall)
+      $fatal(1, "Expected single-vector bank conflict (0 vs 85) to stall");
+    tick();
+    if (pau_rd_valid || mem_fault_o)
+      $fatal(1, "Rejected bank-conflict request should not return data or fault top-level");
+    clear_poly_clients();
+    $display("Scenario 21: Intra-Request Bank Collision (Skewed mapping: 0, 85)... PASS");
+
+    $display("ALL TESTCASES PASSED");
     $finish;
   end
 

@@ -324,7 +324,7 @@ module poly_mem_subsystem #(
   assign wipe_active     = (wipe_state_q != WIPE_IDLE);
   assign wipe_base_idx   = COEFF_ADDR_W'({wipe_row_q, 2'b00});
   assign wipe_busy_o     = wipe_active;
-  assign mem_fault_o     = mem_fault_q;
+  assign mem_fault_o      = mem_fault_q;
   assign mem_fault_code_o = mem_fault_code_q;
 
   // 12-bit Coefficient Formatting Helpers
@@ -418,7 +418,7 @@ module poly_mem_subsystem #(
   logic [3:0][COEFF_ADDR_W-1:0] p0_sel_idx,     p1_sel_idx;
   logic [3:0]              p0_sel_lane_mask, p1_sel_lane_mask;
   logic [3:0][W-1:0]       p0_sel_data,    p1_sel_data;
-  logic                    p0_sel_conflict;
+  logic                    p0_sel_conflict, p1_sel_conflict;
 
   always_comb begin
     p0_sel_owner     = OWNER_NONE;
@@ -435,6 +435,7 @@ module poly_mem_subsystem #(
     p1_sel_idx       = '0;
     p1_sel_lane_mask = '0;
     p1_sel_data      = '0;
+    p1_sel_conflict  = 1'b0;
 
     if (!wipe_active && pau_dual_can_issue) begin
       p0_sel_owner     = OWNER_PAU;
@@ -457,6 +458,7 @@ module poly_mem_subsystem #(
       p1_sel_idx       = pau_aux_idx_req;
       p1_sel_lane_mask = pau_aux_lane_mask_req;
       p1_sel_data      = pau_aux_data_req;
+      p1_sel_conflict  = pau_aux_conflict_req;
     end else if (!wipe_active && !combo_any && !pau_dual_req) begin
       if (pau_single_req) begin
         p0_sel_owner     = OWNER_PAU;
@@ -593,7 +595,7 @@ module poly_mem_subsystem #(
           p1_poly_id_mux    = pau_wr_poly_id;
           p1_wr_en_mux      = pau_wr_en;
           p1_idx_mux        = pau_wr_idx;
-          p1_data_mux       = pau_wr_data;
+          p1_data_mux       = pad_coeff(pau_wr_data);
         end
         OWNER_TR: begin
           p0_poly_id_mux    = tr_rd_poly_id;
@@ -602,7 +604,7 @@ module poly_mem_subsystem #(
           p1_poly_id_mux    = tr_wr_poly_id;
           p1_wr_en_mux      = tr_wr_en;
           p1_idx_mux        = tr_wr_idx;
-          p1_data_mux       = tr_wr_data;
+          p1_data_mux       = pad_coeff(tr_wr_data);
         end
         default: begin
         end
@@ -717,6 +719,9 @@ module poly_mem_subsystem #(
   end
 
   logic p0_ready, p1_ready;
+  logic p0_v, p1_v;
+  assign p0_v = p0_v_mux && ~p0_sel_conflict;
+  assign p1_v = p1_v_mux && ~p1_sel_conflict;
   logic p0_rd_valid_int, p1_rd_valid_int;
   logic [POLY_W-1:0]        p0_rd_poly_id_int, p1_rd_poly_id_int;
   logic [3:0][COEFF_ADDR_W-1:0] p0_rd_idx_int,     p1_rd_idx_int;
@@ -731,7 +736,7 @@ module poly_mem_subsystem #(
     .clk             (clk),
     .rst             (rst),
     .p0_poly_id_i    (p0_poly_id_mux),
-    .p0_v_i          (p0_v_mux),
+    .p0_v_i          (p0_v),
     .p0_wr_en_i      (p0_wr_en_mux),
     .p0_idx_i        (p0_idx_mux),
     .p0_lane_valid_i (p0_lane_valid_mux),
@@ -743,7 +748,7 @@ module poly_mem_subsystem #(
     .p0_rd_lane_valid_o(p0_rd_lane_valid_int),
     .p0_rd_data_o    (p0_rd_data_int),
     .p1_poly_id_i    (p1_poly_id_mux),
-    .p1_v_i          (p1_v_mux),
+    .p1_v_i          (p1_v),
     .p1_wr_en_i      (p1_wr_en_mux),
     .p1_idx_i        (p1_idx_mux),
     .p1_lane_valid_i (p1_lane_valid_mux),
@@ -851,22 +856,22 @@ module poly_mem_subsystem #(
       tr_stall  = tr_req  && (~combo_tr  || ~combo_can_fire);
     end else begin
       if (pau_single_req) begin
-        if (p0_sel_owner == OWNER_PAU) pau_stall = ~p0_ready;
-        else if (p1_sel_owner == OWNER_PAU) pau_stall = ~p1_ready;
+        if (p0_sel_owner == OWNER_PAU) pau_stall = pau_conflict_req || ~p0_ready;
+        else if (p1_sel_owner == OWNER_PAU) pau_stall = pau_conflict_req || ~p1_ready;
         else pau_stall = 1'b1;
       end
 
       if (hsu_poly_rd_unsupported) begin
         hsu_stall = 1'b1;
       end else if (hsu_single_req) begin
-        if (p0_sel_owner == OWNER_HSU) hsu_stall = ~p0_ready;
-        else if (p1_sel_owner == OWNER_HSU) hsu_stall = ~p1_ready;
+        if (p0_sel_owner == OWNER_HSU) hsu_stall = hsu_conflict_req || ~p0_ready;
+        else if (p1_sel_owner == OWNER_HSU) hsu_stall = hsu_conflict_req || ~p1_ready;
         else hsu_stall = 1'b1;
       end
 
       if (tr_single_req) begin
-        if (p0_sel_owner == OWNER_TR) tr_stall = ~p0_ready;
-        else if (p1_sel_owner == OWNER_TR) tr_stall = ~p1_ready;
+        if (p0_sel_owner == OWNER_TR) tr_stall = tr_conflict_req || ~p0_ready;
+        else if (p1_sel_owner == OWNER_TR) tr_stall = tr_conflict_req || ~p1_ready;
         else tr_stall = 1'b1;
       end
     end
