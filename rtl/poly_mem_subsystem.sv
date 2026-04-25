@@ -383,6 +383,8 @@ module poly_mem_subsystem #(
   assign hsu_idx_req         = hsu_wr_req ? hsu_wr_idx : hsu_rd_idx;
   assign tr_idx_req          = tr_wr_req  ? tr_wr_idx  : tr_rd_idx;
 
+  // Lane masks are calculated based on raw address/lane enables to ensure
+  // conflict detection is stable and independent of request validity.
   assign pau_lane_mask_req     = pau_wr_en | pau_rd_lane_valid;
   assign pau_aux_lane_mask_req = pau_aux_wr_en | pau_aux_rd_lane_valid;
   assign hsu_lane_mask_req     = hsu_wr_en | hsu_rd_lane_valid;
@@ -398,20 +400,24 @@ module poly_mem_subsystem #(
                                                  pau_aux_lane_mask_req);
   assign hsu_conflict_req    = req_has_conflict(hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req);
   assign tr_conflict_req     = req_has_conflict(tr_poly_id_req,  tr_idx_req,  tr_lane_mask_req);
+
+  // 'Possible' signals indicate if a request would be legal if issued.
+  // These are used for stall generation to maintain a loop-free backpressure path.
+  logic pau_possible, hsu_possible, tr_possible;
+  assign pau_possible = !pau_conflict_req;
+  assign hsu_possible = !hsu_conflict_req && !hsu_poly_rd_unsupported;
+  assign tr_possible  = !tr_conflict_req;
   assign pau_dual_pair_legal = req_pair_legal(
                                  pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
                                  pau_aux_is_wr_req, pau_aux_poly_id_req, pau_aux_idx_req,
                                  pau_aux_lane_mask_req
                                );
-  logic pau_possible, hsu_possible, tr_possible;
-  assign pau_possible = !pau_conflict_req;
-  assign hsu_possible = !hsu_conflict_req && !hsu_poly_rd_unsupported;
-  assign tr_possible  = !tr_conflict_req;
-
   logic pau_dual_possible;
   assign pau_dual_possible = pau_possible && !pau_aux_conflict_req && pau_dual_pair_legal;
   assign pau_dual_can_issue  = pau_dual_valid && pau_dual_possible;
 
+  // Inter-client conflict signals detect same-address hazards between
+  // different clients based on potential request parameters.
   logic hsu_pau_conflict, tr_pau_conflict, tr_hsu_conflict;
   assign hsu_pau_conflict = !req_pair_legal(
                               pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
@@ -865,6 +871,7 @@ module poly_mem_subsystem #(
       tr_stall  = 1'b1;
     end else begin
       // PAU Stall logic (Priority 0)
+      // Stall depends on potential internal hazards and port readiness.
       if (pau_dual_req) begin
         pau_stall = !(pau_dual_possible && p0_ready && p1_ready);
       end else begin
@@ -872,11 +879,12 @@ module poly_mem_subsystem #(
       end
 
       // HSU Stall logic (Priority 1)
+      // Stall depends on PAU (higher priority) port usage and inter-client hazards.
       if (hsu_req) begin
         if (pau_dual_can_issue || combo_pau) begin
           hsu_stall = 1'b1; // PAU takes both ports
         end else if (pau_req) begin
-          // PAU takes p0, HSU tries p1
+          // PAU takes p0, HSU tries p1. Check inter-client hazards.
           hsu_stall = !hsu_possible || hsu_pau_conflict || !p1_ready;
         end else begin
           // HSU takes p0
@@ -885,16 +893,17 @@ module poly_mem_subsystem #(
       end
 
       // TR Stall logic (Priority 2)
+      // Stall depends on PAU and HSU usage/hazards.
       if (tr_req) begin
         if (pau_dual_can_issue || combo_pau || (pau_req && hsu_req)) begin
           tr_stall = 1'b1; // ports occupied
         end else if (combo_tr) begin
           tr_stall = !tr_possible || !p0_ready || !p1_ready;
         end else if (pau_req) begin
-          // PAU takes p0, TR tries p1
+          // PAU takes p0, TR tries p1. Check conflict with PAU.
           tr_stall = !tr_possible || tr_pau_conflict || !p1_ready;
         end else if (hsu_req) begin
-          // HSU takes p0, TR tries p1
+          // HSU takes p0, TR tries p1. Check conflict with HSU.
           tr_stall = !tr_possible || tr_hsu_conflict || !p1_ready;
         end else begin
           // TR takes p0
