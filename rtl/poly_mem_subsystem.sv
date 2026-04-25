@@ -25,6 +25,11 @@
  *   - During wipe, all polynomial clients stall.
  *   - Memory exposes a small internal-only control/status sideband for the
  *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
+ *
+ *   IMPORTANT:
+ *     Integrators MUST NOT use 'stall' signals to combinatorially generate
+ *     request signals (req, rd_en, wr_en). Doing so will create system-level
+ *     combinational loops. Stall signals are for backpressure only.
  */
 
 import qrem_global_pkg::*;
@@ -68,7 +73,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx_o,
   output logic [3:0]                         pau_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            pau_rd_data,
-  output logic                               pau_stall,
+  output logic                               pau_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ========================================================================
   // PAU auxiliary polynomial-memory descriptor
@@ -112,7 +118,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx_o,
   output logic [3:0]                         hsu_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            hsu_rd_data,
-  output logic                               hsu_stall,
+  output logic                               hsu_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ==========================================================================
   // Transcoder polynomial-memory interface
@@ -131,7 +138,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx_o,
   output logic [3:0]                         tr_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            tr_rd_data,
-  output logic                               tr_stall,
+  output logic                               tr_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ==========================================================================
   // HSU seed / protocol port
