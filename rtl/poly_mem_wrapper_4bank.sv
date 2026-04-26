@@ -154,14 +154,20 @@ module poly_mem_wrapper_4bank #(
   assign p1_any_rd         = |p1_lane_valid_i;
   assign p0_any_wr         = |p0_wr_en_i;
   assign p1_any_wr         = |p1_wr_en_i;
-  assign p0_mode_conflict  = p0_v_i && p0_any_rd && p0_any_wr;
-  assign p1_mode_conflict  = p1_v_i && p1_any_rd && p1_any_wr;
-  assign p0_is_rd          = p0_v_i && p0_any_rd && ~p0_any_wr;
-  assign p1_is_rd          = p1_v_i && p1_any_rd && ~p1_any_wr;
-  assign p0_is_wr          = p0_v_i && p0_any_wr && ~p0_any_rd;
-  assign p1_is_wr          = p1_v_i && p1_any_wr && ~p1_any_rd;
-  assign p0_has_req        = p0_is_rd || p0_is_wr || p0_mode_conflict;
-  assign p1_has_req        = p1_is_rd || p1_is_wr || p1_mode_conflict;
+
+  // Conflict detection uses raw masks (desire) instead of valid-qualified signals.
+  // This ensures p0_ready_o/p1_ready_o are independent of p0_v_i/p1_v_i.
+  assign p0_mode_conflict  = p0_any_rd && p0_any_wr;
+  assign p1_mode_conflict  = p1_any_rd && p1_any_wr;
+  assign p0_is_rd          = p0_any_rd && ~p0_any_wr;
+  assign p1_is_rd          = p1_any_rd && ~p1_any_wr;
+  assign p0_is_wr          = p0_any_wr && ~p0_any_rd;
+  assign p1_is_wr          = p1_any_wr && ~p1_any_rd;
+
+  // Firing logic qualifies with valid bit for actual memory array control.
+  // These signals do not feed back into the 'ready' outputs.
+  assign p0_has_req        = p0_v_i && (p0_is_rd || p0_is_wr || p0_mode_conflict);
+  assign p1_has_req        = p1_v_i && (p1_is_rd || p1_is_wr || p1_mode_conflict);
 
   integer ii, jj;
   always_comb begin

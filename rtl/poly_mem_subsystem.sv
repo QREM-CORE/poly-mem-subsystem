@@ -25,6 +25,11 @@
  *   - During wipe, all polynomial clients stall.
  *   - Memory exposes a small internal-only control/status sideband for the
  *     Main Controller: wipe_busy, wipe_done, and memory fault reporting.
+ *
+ *   IMPORTANT:
+ *     Integrators MUST NOT use 'stall' signals to combinatorially generate
+ *     request signals (req, rd_en, wr_en). Doing so will create system-level
+ *     combinational loops. Stall signals are for backpressure only.
  */
 
 import qrem_global_pkg::*;
@@ -68,7 +73,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     pau_rd_idx_o,
   output logic [3:0]                         pau_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            pau_rd_data,
-  output logic                               pau_stall,
+  output logic                               pau_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ========================================================================
   // PAU auxiliary polynomial-memory descriptor
@@ -112,7 +118,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     hsu_rd_idx_o,
   output logic [3:0]                         hsu_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            hsu_rd_data,
-  output logic                               hsu_stall,
+  output logic                               hsu_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ==========================================================================
   // Transcoder polynomial-memory interface
@@ -131,7 +138,8 @@ module poly_mem_subsystem #(
   output logic [3:0][$clog2(NCOEFF)-1:0]     tr_rd_idx_o,
   output logic [3:0]                         tr_rd_lane_valid_o,
   output logic [3:0][COEFF_W-1:0]            tr_rd_data,
-  output logic                               tr_stall,
+  output logic                               tr_stall, // IMPORTANT: Client MUST NOT use to combinatorially gen req/v (loop hazard)
+
 
   // ==========================================================================
   // HSU seed / protocol port
@@ -383,13 +391,12 @@ module poly_mem_subsystem #(
   assign hsu_idx_req         = hsu_wr_req ? hsu_wr_idx : hsu_rd_idx;
   assign tr_idx_req          = tr_wr_req  ? tr_wr_idx  : tr_rd_idx;
 
-  assign pau_lane_mask_req   = pau_wr_req ? pau_wr_en :
-                               (pau_rd_req ? pau_rd_lane_valid : '0);
-  assign pau_aux_lane_mask_req = pau_aux_wr_req ? pau_aux_wr_en :
-                                 (pau_aux_rd_req ? pau_aux_rd_lane_valid : '0);
-  assign hsu_lane_mask_req   = hsu_wr_req ? hsu_wr_en :
-                               (hsu_rd_allowed_req ? hsu_rd_lane_valid : '0);
-  assign tr_lane_mask_req    = tr_wr_req  ? tr_wr_en  : tr_rd_lane_valid;
+  // Lane masks are calculated based on raw address/lane enables to ensure
+  // conflict detection is stable and independent of request validity.
+  assign pau_lane_mask_req     = pau_wr_en | pau_rd_lane_valid;
+  assign pau_aux_lane_mask_req = pau_aux_wr_en | pau_aux_rd_lane_valid;
+  assign hsu_lane_mask_req     = hsu_wr_en | hsu_rd_lane_valid;
+  assign tr_lane_mask_req      = tr_wr_en  | tr_rd_lane_valid;
 
   assign pau_data_req        = pad_coeff(pau_wr_data);
   assign pau_aux_data_req    = pad_coeff(pau_aux_wr_data);
@@ -401,13 +408,37 @@ module poly_mem_subsystem #(
                                                  pau_aux_lane_mask_req);
   assign hsu_conflict_req    = req_has_conflict(hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req);
   assign tr_conflict_req     = req_has_conflict(tr_poly_id_req,  tr_idx_req,  tr_lane_mask_req);
+
+  // 'Possible' signals indicate if a request would be legal if issued.
+  // These are used for stall generation to maintain a loop-free backpressure path.
+  logic pau_possible, hsu_possible, tr_possible;
+  assign pau_possible = !pau_conflict_req;
+  assign hsu_possible = !hsu_conflict_req && !hsu_poly_rd_unsupported;
+  assign tr_possible  = !tr_conflict_req;
   assign pau_dual_pair_legal = req_pair_legal(
                                  pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
                                  pau_aux_is_wr_req, pau_aux_poly_id_req, pau_aux_idx_req,
                                  pau_aux_lane_mask_req
                                );
-  assign pau_dual_can_issue  = pau_dual_valid && !pau_conflict_req &&
-                               !pau_aux_conflict_req && pau_dual_pair_legal;
+  logic pau_dual_possible;
+  assign pau_dual_possible = pau_possible && !pau_aux_conflict_req && pau_dual_pair_legal;
+  assign pau_dual_can_issue  = pau_dual_valid && pau_dual_possible;
+
+  // Inter-client conflict signals detect same-address hazards between
+  // different clients based on potential request parameters.
+  logic hsu_pau_conflict, tr_pau_conflict, tr_hsu_conflict;
+  assign hsu_pau_conflict = !req_pair_legal(
+                              pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
+                              hsu_is_wr_req, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req
+                            );
+  assign tr_pau_conflict = !req_pair_legal(
+                             pau_is_wr_req, pau_poly_id_req, pau_idx_req, pau_lane_mask_req,
+                             tr_is_wr_req, tr_poly_id_req, tr_idx_req, tr_lane_mask_req
+                           );
+  assign tr_hsu_conflict = !req_pair_legal(
+                             hsu_is_wr_req, hsu_poly_id_req, hsu_idx_req, hsu_lane_mask_req,
+                             tr_is_wr_req, tr_poly_id_req, tr_idx_req, tr_lane_mask_req
+                           );
 
   // --------------------------------------------------------------------------
   // Deterministic 2-port request scheduler
@@ -843,36 +874,49 @@ module poly_mem_subsystem #(
     tr_stall  = 1'b0;
 
     if (wipe_active) begin
-      pau_stall = pau_req;
-      hsu_stall = hsu_req;
-      tr_stall  = tr_req;
-    end else if (pau_dual_req) begin
-      pau_stall = ~(pau_dual_can_issue && p0_ready && p1_ready);
-      hsu_stall = hsu_req;
-      tr_stall  = tr_req;
-    end else if (combo_any) begin
-      pau_stall = pau_req && (~combo_pau || ~combo_can_fire);
-      hsu_stall = hsu_req;
-      tr_stall  = tr_req  && (~combo_tr  || ~combo_can_fire);
+      pau_stall = 1'b1;
+      hsu_stall = 1'b1;
+      tr_stall  = 1'b1;
     end else begin
-      if (pau_single_req) begin
-        if (p0_sel_owner == OWNER_PAU) pau_stall = pau_conflict_req || ~p0_ready;
-        else if (p1_sel_owner == OWNER_PAU) pau_stall = pau_conflict_req || ~p1_ready;
-        else pau_stall = 1'b1;
+      // PAU Stall logic (Priority 0)
+      // Stall depends on potential internal hazards and port readiness.
+      if (pau_dual_req) begin
+        pau_stall = !(pau_dual_possible && p0_ready && p1_ready);
+      end else begin
+        pau_stall = !pau_possible || !p0_ready;
       end
 
-      if (hsu_poly_rd_unsupported) begin
-        hsu_stall = 1'b1;
-      end else if (hsu_single_req) begin
-        if (p0_sel_owner == OWNER_HSU) hsu_stall = hsu_conflict_req || ~p0_ready;
-        else if (p1_sel_owner == OWNER_HSU) hsu_stall = hsu_conflict_req || ~p1_ready;
-        else hsu_stall = 1'b1;
+      // HSU Stall logic (Priority 1)
+      // Stall depends on PAU (higher priority) port usage and inter-client hazards.
+      if (hsu_req) begin
+        if (pau_dual_can_issue || combo_pau) begin
+          hsu_stall = 1'b1; // PAU takes both ports
+        end else if (pau_req) begin
+          // PAU takes p0, HSU tries p1. Check inter-client hazards.
+          hsu_stall = !hsu_possible || hsu_pau_conflict || !p1_ready;
+        end else begin
+          // HSU takes p0
+          hsu_stall = !hsu_possible || !p0_ready;
+        end
       end
 
-      if (tr_single_req) begin
-        if (p0_sel_owner == OWNER_TR) tr_stall = tr_conflict_req || ~p0_ready;
-        else if (p1_sel_owner == OWNER_TR) tr_stall = tr_conflict_req || ~p1_ready;
-        else tr_stall = 1'b1;
+      // TR Stall logic (Priority 2)
+      // Stall depends on PAU and HSU usage/hazards.
+      if (tr_req) begin
+        if (pau_dual_can_issue || combo_pau || (pau_req && hsu_req)) begin
+          tr_stall = 1'b1; // ports occupied
+        end else if (combo_tr) begin
+          tr_stall = !tr_possible || !p0_ready || !p1_ready;
+        end else if (pau_req) begin
+          // PAU takes p0, TR tries p1. Check conflict with PAU.
+          tr_stall = !tr_possible || tr_pau_conflict || !p1_ready;
+        end else if (hsu_req) begin
+          // HSU takes p0, TR tries p1. Check conflict with HSU.
+          tr_stall = !tr_possible || tr_hsu_conflict || !p1_ready;
+        end else begin
+          // TR takes p0
+          tr_stall = !tr_possible || !p0_ready;
+        end
       end
     end
   end
