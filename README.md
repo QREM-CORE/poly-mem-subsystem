@@ -156,10 +156,10 @@ The shared `make` flow depends on the `build-tools` and `lib/common-rtl` submodu
 
 ## Documentation
 
-- `doc/V075_INTERFACE_REVIEW.md`
-- `doc/docs.md`
-- `doc/memory_subsystem.tex`
-- `doc/memory_connections.tex`
+- [README.md](https://github.com/QREM-CORE/qrem-docs/blob/main/poly-mem-subsystem/README.md)
+- [interfaces.md](https://github.com/QREM-CORE/qrem-docs/blob/main/poly-mem-subsystem/interfaces.md)
+- [fsm-states.md](https://github.com/QREM-CORE/qrem-docs/blob/main/poly-mem-subsystem/fsm-states.md)
+- [datapath.md](https://github.com/QREM-CORE/qrem-docs/blob/main/poly-mem-subsystem/datapath.md)
 
 ## Follow-On Note
 
